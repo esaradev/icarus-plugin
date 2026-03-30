@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.icarus-state.json
+.icarus-models.json
+.icarus-training-job.txt
+training-data/
