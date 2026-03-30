@@ -1,25 +1,27 @@
-```
-                      .
-                     /|\
-                    / | \
-                   /  |  \
-                  /   |   \
-                 / ,--+--, \
-                /,'   |   ',\
-               //  ,--+--,  \\
-              //__/    |    \__\\
-                 \     |     /
-                  \  __|__  /
-                   \/     \/
-                    '.   .'
-                  ____'.'____
-                 /           \
-                /   I C A R U S
-               /               \
-              '~~~~~~~~~~~~~~~~~'
+```diff
++                      .
++                     /|\
++                    / | \
++                   /  |  \
++                  /   |   \
++                 / ,--+--, \
++                /,'   |   ',\
+!               //  ,--+--,  \\
+!              //__/    |    \__\\
+-                 \     |     /
+-                  \  __|__  /
+-                   \/     \/
+!                    '.   .'
+!                  ____'.'____
+!                 /           \
++                /  I C A R U S  \
++               /                 \
++              '~~~~~~~~~~~~~~~~~~~'
 ```
 
-Self-memory and replacement models for Hermes agents.
+> **Self-memory and replacement models for Hermes agents.**
+>
+> *Remember your work. Train your replacement.*
 
 An agent remembers its useful work, recalls it when it matters, turns that history into training data, and fine-tunes a cheaper replacement model that preserves its style and task knowledge.
 
