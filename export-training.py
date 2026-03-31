@@ -119,9 +119,14 @@ def make_pair(user_content, assistant_content, metadata=None):
     }
 
 
+def _timestamp_sort_key(entry):
+    return str(entry.get("timestamp", ""))
+
+
 def extract_pairs(entries):
     """Extract all training pairs from fabric entries."""
     pairs = []
+    seen_pairs = set()
     review_pairs = 0
     xplat_pairs = 0
 
@@ -133,6 +138,15 @@ def extract_pairs(entries):
             refs = [r.strip() for r in refs.split(",") if r.strip()]
         agent = e.get("agent", "")
         by_ref[f"{agent}:{e.get('file', '')}"] = e
+
+    def add_pair(user_msg, output, metadata, dedupe_key=None):
+        nonlocal pairs
+        key = dedupe_key or (metadata.get("type"), user_msg, output)
+        if key in seen_pairs:
+            return False
+        seen_pairs.add(key)
+        pairs.append(make_pair(user_msg, output, metadata))
+        return True
 
     for e in entries:
         agent = e.get("agent", "unknown")
@@ -148,37 +162,37 @@ def extract_pairs(entries):
 
         # ── OUTCOME PAIR: focused summary → outcome ──
         if e.get("outcome"):
-            pairs.append(make_pair(
+            add_pair(
                 f"[outcome] {summary}",
                 e["outcome"],
                 {"type": "outcome", "agent": agent, "platform": platform, "training_value": tv},
-            ))
+            )
 
         # ── BASIC PAIR: type as task, body as response ──
         if entry_type in ("code-session", "task", "resolution", "research"):
             user_msg = f"[{entry_type}] {summary}" if summary else f"Complete this {entry_type}"
-            pairs.append(make_pair(user_msg, body, {"type": "basic", "agent": agent, "platform": platform, "training_value": tv}))
+            add_pair(user_msg, body, {"type": "basic", "agent": agent, "platform": platform, "training_value": tv})
 
         elif entry_type == "dialogue":
             # For dialogue, the thought IS the output
             user_msg = f"[dialogue] Respond as {agent} in a multi-agent conversation."
-            pairs.append(make_pair(user_msg, body, {"type": "dialogue", "agent": agent, "platform": platform, "training_value": tv}))
+            add_pair(user_msg, body, {"type": "dialogue", "agent": agent, "platform": platform, "training_value": tv})
 
         elif entry_type == "decision":
             user_msg = f"[decision] What did you decide?"
-            pairs.append(make_pair(user_msg, body, {"type": "decision", "agent": agent, "platform": platform, "training_value": tv}))
+            add_pair(user_msg, body, {"type": "decision", "agent": agent, "platform": platform, "training_value": tv})
 
         elif entry_type == "session":
             user_msg = f"[session] Summarize what was accomplished."
-            pairs.append(make_pair(user_msg, body, {"type": "session", "agent": agent, "platform": platform, "training_value": tv}))
+            add_pair(user_msg, body, {"type": "session", "agent": agent, "platform": platform, "training_value": tv})
 
         elif entry_type == "review":
             user_msg = f"[review] Review the following code or work."
-            pairs.append(make_pair(user_msg, body, {"type": "review", "agent": agent, "platform": platform, "training_value": tv}))
+            add_pair(user_msg, body, {"type": "review", "agent": agent, "platform": platform, "training_value": tv})
 
         else:
             user_msg = f"[{entry_type or 'task'}] {summary or 'Complete this task'}"
-            pairs.append(make_pair(user_msg, body, {"type": "basic", "agent": agent, "platform": platform}))
+            add_pair(user_msg, body, {"type": "basic", "agent": agent, "platform": platform})
 
         # ── Parse refs ──
         refs = e.get("refs", [])
@@ -195,7 +209,7 @@ def extract_pairs(entries):
                 review_file = e.get("file", "")
                 orig_file = orig.get("file", "")
                 ref_agent = ref.split(":")[0] if ":" in ref else ""
-                improved = None
+                candidates = []
                 for candidate in entries:
                     if candidate.get("agent") != ref_agent:
                         continue
@@ -214,13 +228,18 @@ def extract_pairs(entries):
                             refs_back = True
                             break
                     if refs_back:
-                        improved = candidate
-                        break
-                if not improved:
+                        candidates.append(candidate)
+                if not candidates:
                     continue
+                improved = max(candidates, key=_timestamp_sort_key)
                 user_msg = f"[self-correct] Original work:\n{orig.get('body', '')[:300]}\n\nReview feedback:\n{body[:300]}\n\nProvide the improved version."
-                pairs.append(make_pair(user_msg, improved.get("body", ""), {"type": "review-correction", "reviewer": agent, "author": ref_agent}))
-                review_pairs += 1
+                if add_pair(
+                    user_msg,
+                    improved.get("body", ""),
+                    {"type": "review-correction", "reviewer": agent, "author": ref_agent},
+                    dedupe_key=("review-correction", e.get("file", ""), orig.get("file", ""), improved.get("file", "")),
+                ):
+                    review_pairs += 1
 
         # ── REVIEW PAIRS via review_of/revises (v3 plugin path) ──
         if entry_type == "review" and e.get("review_of"):
@@ -228,18 +247,19 @@ def extract_pairs(entries):
             orig = _resolve_ref(ref, entries)
             if orig:
                 ref_agent = ref.split(":")[0] if ":" in ref else ""
-                improved = None
-                for candidate in entries:
-                    if candidate.get("revises") == ref:
-                        improved = candidate
-                        break
-                if improved:
-                    rc_key = (e.get("file", ""), orig.get("file", ""))
-                    # avoid duplicate if refs-based path already found this pair
+                candidates = [
+                    candidate for candidate in entries
+                    if candidate.get("revises") == ref and candidate.get("timestamp", "") > e.get("timestamp", "")
+                ]
+                if candidates:
+                    improved = max(candidates, key=_timestamp_sort_key)
                     rc_msg = f"[self-correct] Original work:\n{orig.get('body', '')[:300]}\n\nReview feedback:\n{body[:300]}\n\nProvide the improved version."
-                    if not any(p["input"] == rc_msg for p in pairs if p.get("metadata", {}).get("type") == "review-correction"):
-                        pairs.append(make_pair(rc_msg, improved.get("body", ""),
-                            {"type": "review-correction", "reviewer": agent, "author": ref_agent, "training_value": tv}))
+                    if add_pair(
+                        rc_msg,
+                        improved.get("body", ""),
+                        {"type": "review-correction", "reviewer": agent, "author": ref_agent, "training_value": tv},
+                        dedupe_key=("review-correction", e.get("file", ""), orig.get("file", ""), improved.get("file", "")),
+                    ):
                         review_pairs += 1
 
         # ── CROSS-PLATFORM via review_of ──
@@ -249,9 +269,13 @@ def extract_pairs(entries):
                 src_plat = source.get("platform", "")
                 if src_plat and src_plat != platform:
                     user_msg = f"[cross-platform context] Memory from {src_plat}:\n{source.get('body', '')[:300]}\n\nYou are on {platform}. Use this context in your response."
-                    pairs.append(make_pair(user_msg, body,
-                        {"type": "cross-platform", "source_platform": src_plat, "target_platform": platform, "agent": agent, "training_value": tv}))
-                    xplat_pairs += 1
+                    if add_pair(
+                        user_msg,
+                        body,
+                        {"type": "cross-platform", "source_platform": src_plat, "target_platform": platform, "agent": agent, "training_value": tv},
+                        dedupe_key=("cross-platform", source.get("file", ""), e.get("file", ""), platform),
+                    ):
+                        xplat_pairs += 1
 
         # ── CROSS-PLATFORM PAIRS: resolve ref to specific entry ──
         if refs and platform:
@@ -263,8 +287,13 @@ def extract_pairs(entries):
                 if not src_plat or src_plat == platform:
                     continue  # same platform, not cross-platform
                 user_msg = f"[cross-platform context] Memory from {src_plat}:\n{source.get('body', '')[:300]}\n\nYou are on {platform}. Use this context in your response."
-                pairs.append(make_pair(user_msg, body, {"type": "cross-platform", "source_platform": src_plat, "target_platform": platform, "agent": agent}))
-                xplat_pairs += 1
+                if add_pair(
+                    user_msg,
+                    body,
+                    {"type": "cross-platform", "source_platform": src_plat, "target_platform": platform, "agent": agent},
+                    dedupe_key=("cross-platform", source.get("file", ""), e.get("file", ""), platform),
+                ):
+                    xplat_pairs += 1
 
     return pairs, review_pairs, xplat_pairs
 

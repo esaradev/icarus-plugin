@@ -660,17 +660,20 @@ def switch_model(model_id, min_eval_score=0.7):
     backup = HERMES_HOME / ".env.backup"
     shutil.copy2(env_file, backup)
 
-    # only update LLM_MODEL -- don't clobber existing provider config
-    filtered = [l for l in lines if not l.startswith("LLM_MODEL=")]
-    filtered.append(f"LLM_MODEL={model_id}")
+    key = _together_key()
+    if not key:
+        return {"error": "TOGETHER_API_KEY not set in .env"}
 
-    # only add Together provider config if no OPENAI_BASE_URL exists
-    has_base_url = any(l.startswith("OPENAI_BASE_URL=") for l in lines)
-    if not has_base_url:
-        key = _together_key()
-        if key:
-            filtered.append("OPENAI_BASE_URL=https://api.together.xyz/v1")
-            filtered.append(f"OPENAI_API_KEY={key}")
+    # Replacement models are served from Together. Repoint the OpenAI-compatible
+    # provider config deliberately and rely on the backup / rollback path to
+    # preserve the previous provider state.
+    filtered = [
+        l for l in lines
+        if not l.startswith(("LLM_MODEL=", "OPENAI_BASE_URL=", "OPENAI_API_KEY="))
+    ]
+    filtered.append(f"LLM_MODEL={model_id}")
+    filtered.append("OPENAI_BASE_URL=https://api.together.xyz/v1")
+    filtered.append(f"OPENAI_API_KEY={key}")
 
     # atomic write
     tmp = env_file.with_suffix(".tmp")
@@ -727,7 +730,12 @@ def rollback_model():
     for m in registry["models"]:
         if m.get("active"):
             m["active"] = False
-    registry["active_model"] = None
+    restored_match = None
+    for m in registry["models"]:
+        if m.get("output_model") == restored_model:
+            m["active"] = True
+            restored_match = restored_model
+    registry["active_model"] = restored_match
     _save_registry(registry)
 
     return {
