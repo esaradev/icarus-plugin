@@ -9,13 +9,21 @@ cd icarus-plugin
 
 No build step. The plugin is pure Python with no dependencies beyond stdlib.
 
+To test with a local Hermes profile:
+
+```bash
+hermes profile create dev-test
+cp -r . ~/.hermes/profiles/dev-test/plugins/icarus
+hermes -p dev-test chat
+```
+
 ## Testing
 
 ```bash
 bash scripts/smoke-handoff.sh
 ```
 
-This proves the full builder -> reviewer -> fix chain end-to-end with temp fabric and temp Hermes homes.
+This proves the full builder -> reviewer -> fix chain end-to-end with temp fabric and temp Hermes homes. No live Hermes or API keys needed.
 
 ## Making changes
 

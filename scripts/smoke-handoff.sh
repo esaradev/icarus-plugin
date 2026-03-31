@@ -15,14 +15,14 @@ pass() { printf '  pass: %s\n' "$1"; }
 fail() { printf '  FAIL: %s\n' "$1" >&2; exit 1; }
 
 mkdir -p "$FABRIC_DIR" "$FABRIC_DIR/cold"
-mkdir -p "$ICARUS_HOME/plugins" "$DAEDALUS_HOME/plugins"
+mkdir -p "$ICARUS_HOME/plugins/icarus" "$DAEDALUS_HOME/plugins/icarus"
 
-cp -R "$REPO_DIR/plugins/icarus" "$ICARUS_HOME/plugins/"
-cp -R "$REPO_DIR/plugins/icarus" "$DAEDALUS_HOME/plugins/"
-cp "$REPO_DIR/fabric-retrieve.py" "$ICARUS_HOME/plugins/icarus/"
-cp "$REPO_DIR/fabric-retrieve.py" "$DAEDALUS_HOME/plugins/icarus/"
-[ -f "$REPO_DIR/export-training.py" ] && cp "$REPO_DIR/export-training.py" "$ICARUS_HOME/plugins/icarus/"
-[ -f "$REPO_DIR/export-training.py" ] && cp "$REPO_DIR/export-training.py" "$DAEDALUS_HOME/plugins/icarus/"
+# repo root IS the plugin — copy all plugin files + support scripts
+for home in "$ICARUS_HOME" "$DAEDALUS_HOME"; do
+    cp "$REPO_DIR"/*.py "$home/plugins/icarus/"
+    cp "$REPO_DIR"/plugin.yaml "$home/plugins/icarus/"
+    [ -d "$REPO_DIR/scripts" ] && cp -R "$REPO_DIR/scripts" "$home/plugins/icarus/"
+done
 
 export FABRIC_DIR
 export ICARUS_HOME
@@ -35,10 +35,29 @@ import os
 import sys
 from pathlib import Path
 
-repo_dir = Path(os.environ["REPO_DIR"])
-sys.path.insert(0, str(repo_dir / "plugins"))
+# load the plugin as a package (files use relative imports)
+import importlib.util
+import types
 
-from icarus import hooks, state, tools  # noqa: E402
+repo_dir = Path(os.environ["REPO_DIR"])
+
+ns = types.ModuleType("hermes_plugins")
+ns.__path__ = []
+ns.__package__ = "hermes_plugins"
+sys.modules["hermes_plugins"] = ns
+
+spec = importlib.util.spec_from_file_location(
+    "hermes_plugins.icarus", str(repo_dir / "__init__.py"),
+    submodule_search_locations=[str(repo_dir)])
+mod = importlib.util.module_from_spec(spec)
+mod.__package__ = "hermes_plugins.icarus"
+mod.__path__ = [str(repo_dir)]
+sys.modules["hermes_plugins.icarus"] = mod
+spec.loader.exec_module(mod)
+
+hooks = mod.hooks
+state = mod.state
+tools = mod.tools
 
 
 def parse_id(path: str) -> str:
@@ -56,6 +75,7 @@ def run_as(agent_name: str, home: str):
     state.FABRIC_DIR = Path(os.environ["FABRIC_DIR"])
     state._JOB_FILE = state.HERMES_HOME / ".icarus-training-job.txt"
     state._STATE_FILE = state.HERMES_HOME / ".icarus-state.json"
+    state._REGISTRY_FILE = state.HERMES_HOME / ".icarus-models.json"
     state.session_id = ""
     state.exchanges = []
 

@@ -336,7 +336,6 @@ def _load_retriever():
     ]
     if HERMES_HOME:
         paths.append(HERMES_HOME / "plugins" / "icarus" / "fabric-retrieve.py")
-        paths.append(HERMES_HOME / "plugins" / "fabric-memory" / "fabric-retrieve.py")
     for p in paths:
         if p and p.exists():
             try:
@@ -399,9 +398,6 @@ def _together_request(method, url, data=None):
 def export_training(mode="normal"):
     """Export fabric entries as training pairs. Returns stats dict."""
     export_script = PLUGIN_DIR / "export-training.py"
-    if not export_script.exists():
-        repo_root = PLUGIN_DIR.parent.parent
-        export_script = repo_root / "export-training.py"
     if not export_script.exists():
         return {"error": "export-training.py not found"}
 
@@ -576,9 +572,7 @@ def check_training(job_id=None):
 
 def run_eval(candidate_model, base_model=None, sample_count=10):
     """Run replacement-model eval. Returns comparison results."""
-    eval_script = PLUGIN_DIR.parent.parent / "scripts" / "eval-replacement.py"
-    if not eval_script.exists():
-        eval_script = PLUGIN_DIR / "eval-replacement.py"
+    eval_script = PLUGIN_DIR / "scripts" / "eval-replacement.py"
     if not eval_script.exists():
         return {"error": "eval-replacement.py not found"}
 
