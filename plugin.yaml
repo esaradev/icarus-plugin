@@ -17,6 +17,7 @@ provides_tools:
   - fabric_rollback_model
   - fabric_brief
   - fabric_telemetry
+  - fabric_init_obsidian
 provides_hooks:
   - on_session_start
   - pre_llm_call

@@ -378,3 +378,19 @@ FABRIC_TELEMETRY = {
         "required": [],
     },
 }
+
+FABRIC_INIT_OBSIDIAN = {
+    "name": "fabric_init_obsidian",
+    "description": (
+        "Initialize the fabric directory as an Obsidian vault. Creates "
+        "daily/ directory for daily notes and .obsidian/ with minimal config. "
+        "Safe to call multiple times. After this, open ~/fabric/ in Obsidian "
+        "to browse entries with wikilinks and daily notes. "
+        "Set ICARUS_OBSIDIAN=1 in .env to enable ongoing Obsidian formatting."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+}

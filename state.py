@@ -319,6 +319,16 @@ def write_entry(entry_type, content, summary, tier="hot", tags="", platform="cli
     path = FABRIC_DIR / filename
     path.write_text("\n".join(lines), "utf-8")
     logger.info("icarus: wrote %s", filename)
+
+    # opt-in obsidian formatting
+    if os.environ.get("ICARUS_OBSIDIAN"):
+        try:
+            from . import obsidian
+            obsidian.format_entry(path, FABRIC_DIR, review_of=review_of, revises=revises)
+            obsidian.ensure_daily_note(FABRIC_DIR, filename, summary)
+        except Exception as exc:
+            logger.debug("icarus: obsidian formatting failed: %s", exc)
+
     return str(path)
 
 

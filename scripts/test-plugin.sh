@@ -31,6 +31,7 @@ import shutil
 import sys
 import types
 import importlib.util
+from datetime import datetime, timezone
 from pathlib import Path
 
 repo_dir = Path(os.environ["REPO_DIR"])
@@ -726,6 +727,135 @@ if any("architecture" in str(e.get("summary", "")).lower() for e in excluded_ent
     ok("low-value unverified session excluded from high-precision")
 else:
     bad("low-value session not excluded from high-precision")
+
+
+# ══════════════════════════════════════════════════════════
+print("\nobsidian integration")
+print("")
+# ══════════════════════════════════════════════════════════
+
+clean_fabric()
+reset_agent("alice")
+
+# write an entry that will be the review target
+_, target_id = write_fixture("alice", "code-session",
+    "Built OAuth PKCE flow.",
+    "oauth pkce implementation")
+target_filename = None
+for f in fabric_dir.glob("*.md"):
+    head = f.read_text("utf-8")[:400]
+    if f"id: {target_id}" in head:
+        target_filename = f.stem
+        break
+
+# enable obsidian mode
+os.environ["ICARUS_OBSIDIAN"] = "1"
+
+# write a review with review_of -- should get wikilinks
+reset_agent("bob")
+r = json.loads(tools.fabric_write({
+    "type": "review",
+    "content": "MUST FIX: missing state param validation.",
+    "summary": "reviewed oauth pkce",
+    "review_of": f"alice:{target_id}",
+}))
+assert r.get("status") == "written", f"obsidian write failed: {r}"
+
+review_content = Path(r["path"]).read_text("utf-8")
+
+# verify frontmatter is unchanged
+if review_content.startswith("---") and "id: " in review_content[:400]:
+    ok("obsidian: frontmatter preserved")
+else:
+    bad("obsidian: frontmatter corrupted")
+
+# verify wikilinks section exists
+if "## Links" in review_content:
+    ok("obsidian: ## Links section added")
+else:
+    bad("obsidian: ## Links section missing")
+
+# verify wikilink resolves to correct file
+if target_filename and f"[[{target_filename}]]" in review_content:
+    ok(f"obsidian: wikilink resolves to [[{target_filename}]]")
+else:
+    bad(f"obsidian: wikilink not found (expected [[{target_filename}]])")
+
+# verify daily note created
+today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+daily_path = fabric_dir / "daily" / f"{today}.md"
+if daily_path.exists():
+    ok("obsidian: daily note created")
+    daily_content = daily_path.read_text("utf-8")
+    review_stem = Path(r["path"]).stem
+    if f"[[{review_stem}]]" in daily_content:
+        ok("obsidian: daily note links to new entry")
+    else:
+        bad("obsidian: daily note missing entry link")
+else:
+    bad("obsidian: daily note not created")
+
+# test init_obsidian
+from obsidian import init_obsidian as _init_obs
+init_result = _init_obs(fabric_dir)
+if init_result.get("status") in ("initialized", "already_initialized"):
+    ok("obsidian: init_obsidian runs successfully")
+else:
+    bad(f"obsidian: init_obsidian failed: {init_result}")
+
+obs_app = fabric_dir / ".obsidian" / "app.json"
+if obs_app.exists():
+    ok("obsidian: .obsidian/app.json created")
+else:
+    bad("obsidian: .obsidian/app.json missing")
+
+# disable obsidian and verify no links added
+del os.environ["ICARUS_OBSIDIAN"]
+clean_fabric()
+reset_agent("alice")
+
+r2 = json.loads(tools.fabric_write({
+    "type": "task",
+    "content": "Plain task without obsidian.",
+    "summary": "plain task",
+}))
+assert r2.get("status") == "written"
+plain_content = Path(r2["path"]).read_text("utf-8")
+if "## Links" not in plain_content:
+    ok("obsidian: disabled mode produces no wikilinks")
+else:
+    bad("obsidian: wikilinks added even when ICARUS_OBSIDIAN is unset")
+
+daily_dir = fabric_dir / "daily"
+# daily dir might exist from previous test but should have no new note for this entry
+if not daily_dir.exists() or not any(
+    Path(r2["path"]).stem in f.read_text("utf-8")
+    for f in daily_dir.glob("*.md")
+):
+    ok("obsidian: disabled mode produces no daily note entry")
+else:
+    bad("obsidian: daily note updated even when ICARUS_OBSIDIAN is unset")
+
+# verify export still works on obsidian-formatted entries
+os.environ["ICARUS_OBSIDIAN"] = "1"
+clean_fabric()
+reset_agent("alice")
+write_fixture("alice", "code-session", "Built rate limiter.", "rate limiter")
+r3 = json.loads(tools.fabric_write({
+    "type": "task",
+    "content": "Another task with obsidian links in body.",
+    "summary": "obsidian body task",
+}))
+del os.environ["ICARUS_OBSIDIAN"]
+
+# export should still parse the entry correctly
+exp.FABRIC_DIR = fabric_dir
+obs_entries = exp.scan_all()
+obs_parsed = [e for e in obs_entries if "obsidian body task" in str(e.get("summary", ""))]
+if obs_parsed:
+    ok("obsidian: export parses obsidian-formatted entries")
+else:
+    bad("obsidian: export fails on obsidian-formatted entries")
 
 
 # ══════════════════════════════════════════════════════════
