@@ -65,6 +65,148 @@ def list_models():
     return _load_registry()
 
 
+# ── Retrieval telemetry ──────────────────────────────────
+_TELEMETRY_FILE = (HERMES_HOME or Path.home()) / ".icarus-telemetry.jsonl"
+
+# in-memory buffer for current session
+_recall_log: list = []
+
+
+def log_recall(query, results, source="pre_llm_call"):
+    """Log what was recalled and injected."""
+    entry = {
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "event": "recall",
+        "source": source,
+        "query": query[:100],
+        "result_count": len(results),
+        "result_ids": [r.get("id", "") for r in results[:5] if isinstance(r, dict)],
+        "result_summaries": [r.get("summary", "")[:60] for r in results[:5] if isinstance(r, dict)],
+        "session_id": session_id,
+        "agent": AGENT_NAME,
+    }
+    _recall_log.append(entry)
+    try:
+        with open(_TELEMETRY_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass
+
+
+def log_usage(entry_id, action="referenced"):
+    """Log when a recalled entry is actually used (referenced in a write)."""
+    entry = {
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "event": "usage",
+        "action": action,
+        "entry_id": entry_id,
+        "session_id": session_id,
+        "agent": AGENT_NAME,
+    }
+    _recall_log.append(entry)
+    try:
+        with open(_TELEMETRY_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass
+
+
+def get_telemetry(last_n=50):
+    """Read recent telemetry entries."""
+    empty_summary = {"total_recalls": 0, "total_usages": 0, "unique_entries_recalled": 0, "unique_entries_used": 0, "usage_rate": 0.0}
+    if not _TELEMETRY_FILE.exists():
+        return {"events": [], "summary": empty_summary}
+    lines = _TELEMETRY_FILE.read_text("utf-8").strip().split("\n")
+    events = []
+    for line in lines[-last_n:]:
+        try:
+            events.append(json.loads(line))
+        except Exception:
+            pass
+
+    # compute summary
+    recalls = [e for e in events if e.get("event") == "recall"]
+    usages = [e for e in events if e.get("event") == "usage"]
+    recalled_ids = set()
+    for r in recalls:
+        recalled_ids.update(r.get("result_ids", []))
+    used_ids = set(u.get("entry_id", "") for u in usages)
+    used_ids.discard("")
+    recalled_ids.discard("")
+
+    return {
+        "events": events,
+        "summary": {
+            "total_recalls": len(recalls),
+            "total_usages": len(usages),
+            "unique_entries_recalled": len(recalled_ids),
+            "unique_entries_used": len(used_ids),
+            "usage_rate": round(len(used_ids) / max(len(recalled_ids), 1), 2),
+        },
+    }
+
+
+def build_brief():
+    """Build the daily brief: pending work, recent own work, changes, suggested action."""
+    agent = AGENT_NAME or "agent"
+    brief = {}
+
+    # pending
+    open_tasks, reviews, open_tickets = read_pending()
+    brief["pending"] = {
+        "open_tasks": len(open_tasks),
+        "reviews_of_my_work": len(reviews),
+        "open_tickets": len(open_tickets),
+        "items": [],
+    }
+    for t in open_tasks[:3]:
+        brief["pending"]["items"].append({
+            "from": t.get("agent", "?"),
+            "summary": t.get("summary", "?"),
+            "type": t.get("type", "?"),
+            "id": t.get("id", "?"),
+        })
+    for r in reviews[:3]:
+        brief["pending"]["items"].append({
+            "from": r.get("agent", "?"),
+            "summary": r.get("summary", "?"),
+            "type": "review",
+            "id": r.get("id", "?"),
+            "review_of": r.get("review_of", ""),
+        })
+
+    # recent own work (last 5 entries by this agent)
+    own = read_recent(agent=agent, limit=5)
+    brief["recent_work"] = [
+        {"summary": e.get("summary", "?"), "timestamp": str(e.get("timestamp", ""))[:16]}
+        for e in own
+    ]
+
+    # recent activity from others (changes since last session)
+    others = read_cross_agent(limit=5)
+    brief["from_others"] = others
+
+    # suggested action
+    if open_tasks:
+        t = open_tasks[0]
+        brief["suggested_action"] = f"Pick up: {t.get('summary', '?')} from {t.get('agent', '?')} (id {t.get('id', '?')})"
+    elif reviews:
+        r = reviews[0]
+        brief["suggested_action"] = f"Address review: {r.get('summary', '?')} from {r.get('agent', '?')} ({r.get('review_of', '')})"
+    elif open_tickets:
+        t = open_tickets[0]
+        brief["suggested_action"] = f"Resolve ticket: {t.get('summary', '?')} [{t.get('customer_id', '?')}]"
+    else:
+        brief["suggested_action"] = "No pending work. Continue current task or check fabric_recall for context."
+
+    # telemetry summary (if available)
+    tel = get_telemetry(last_n=20)
+    if tel.get("summary", {}).get("total_recalls", 0) > 0:
+        brief["recall_stats"] = tel["summary"]
+
+    return brief
+
+
 # ── Creative state ───────────────────────────────────────
 _STATE_FILE = (HERMES_HOME or Path.home()) / ".icarus-state.json"
 

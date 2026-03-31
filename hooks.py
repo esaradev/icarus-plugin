@@ -158,6 +158,9 @@ def pre_llm_call(session_id="", user_message="", is_first_turn=False, **kwargs):
     if not results:
         return None
 
+    # log what was recalled for telemetry
+    state.log_recall(user_message, results, source="pre_llm_call")
+
     lines = ["[fabric] relevant to your request:"]
     for e in results:
         ts = str(e.get("timestamp", ""))[:16] or "?"

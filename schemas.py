@@ -342,3 +342,39 @@ FABRIC_ROLLBACK_MODEL = {
         "required": [],
     },
 }
+
+FABRIC_BRIEF = {
+    "name": "fabric_brief",
+    "description": (
+        "Get your daily operational brief. Returns: what's pending for you "
+        "(open tasks, reviews, tickets), your recent work, what other agents "
+        "have done, and a suggested next action. Use this at the start of "
+        "every session to decide what to work on. One call replaces checking "
+        "fabric_pending + fabric_recall + fabric_models separately."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+}
+
+FABRIC_TELEMETRY = {
+    "name": "fabric_telemetry",
+    "description": (
+        "Show retrieval and usage telemetry. Reports: how many times memory "
+        "was recalled, how many recalled entries were actually used (referenced "
+        "via review_of or revises), and the usage rate. Use this to understand "
+        "whether recalled memories are useful or just noise."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "last_n": {
+                "type": "integer",
+                "description": "Number of recent telemetry events to return (default: 50)",
+            },
+        },
+        "required": [],
+    },
+}

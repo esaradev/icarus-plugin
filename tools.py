@@ -71,6 +71,13 @@ def fabric_write(args: dict, **kwargs) -> str:
             source_tool=args.get("source_tool", ""),
             artifact_paths=args.get("artifact_paths", ""),
         )
+        # log usage telemetry when referencing other entries
+        if review_of:
+            ref_id = review_of.split(":", 1)[1] if ":" in review_of else review_of
+            state.log_usage(ref_id, action="reviewed")
+        if revises:
+            ref_id = revises.split(":", 1)[1] if ":" in revises else revises
+            state.log_usage(ref_id, action="revised")
         return _json({"status": "written", "path": path})
     except Exception as e:
         return _json({"error": str(e)})
@@ -187,6 +194,22 @@ def fabric_switch_model(args: dict, **kwargs) -> str:
 def fabric_rollback_model(args: dict, **kwargs) -> str:
     try:
         result = state.rollback_model()
+        return _json(result)
+    except Exception as e:
+        return _json({"error": str(e)})
+
+
+def fabric_brief(args: dict, **kwargs) -> str:
+    try:
+        result = state.build_brief()
+        return _json(result)
+    except Exception as e:
+        return _json({"error": str(e)})
+
+
+def fabric_telemetry(args: dict, **kwargs) -> str:
+    try:
+        result = state.get_telemetry(last_n=args.get("last_n", 50))
         return _json(result)
     except Exception as e:
         return _json({"error": str(e)})

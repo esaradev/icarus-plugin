@@ -19,6 +19,11 @@ Replacement-model tools:
   fabric_models        — list all trained models with eval scores
   fabric_eval          — compare candidate vs base model on fabric-derived eval set
   fabric_switch_model  — activate a replacement model if eval passes threshold
+  fabric_rollback_model — emergency rollback to .env.backup
+
+Daily driver:
+  fabric_brief         — operational brief: pending, recent work, suggested action
+  fabric_telemetry     — retrieval/usage stats: what gets recalled, what gets used
 
 Hooks (automatic):
   on_session_start  — loads SOUL, pending handoffs, recent context
@@ -65,10 +70,16 @@ def register(ctx):
     ctx.register_tool(name="fabric_rollback_model", toolset="fabric",
                       schema=schemas.FABRIC_ROLLBACK_MODEL, handler=tools.fabric_rollback_model)
 
+    # daily driver
+    ctx.register_tool(name="fabric_brief", toolset="fabric",
+                      schema=schemas.FABRIC_BRIEF, handler=tools.fabric_brief)
+    ctx.register_tool(name="fabric_telemetry", toolset="fabric",
+                      schema=schemas.FABRIC_TELEMETRY, handler=tools.fabric_telemetry)
+
     # hooks
     ctx.register_hook("on_session_start", hooks.on_session_start)
     ctx.register_hook("pre_llm_call", hooks.pre_llm_call)
     ctx.register_hook("post_llm_call", hooks.post_llm_call)
     ctx.register_hook("on_session_end", hooks.on_session_end)
 
-    logger.info("icarus v3 registered (12 tools, 4 hooks)")
+    logger.info("icarus v3 registered (14 tools, 4 hooks)")

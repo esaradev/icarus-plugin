@@ -15,6 +15,8 @@ provides_tools:
   - fabric_eval
   - fabric_switch_model
   - fabric_rollback_model
+  - fabric_brief
+  - fabric_telemetry
 provides_hooks:
   - on_session_start
   - pre_llm_call
