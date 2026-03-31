@@ -86,8 +86,10 @@ def reset_agent(name):
     state._JOB_FILE = home_dir / ".icarus-training-job.txt"
     state._STATE_FILE = home_dir / ".icarus-state.json"
     state._REGISTRY_FILE = home_dir / ".icarus-models.json"
+    state._TELEMETRY_FILE = home_dir / ".icarus-telemetry.jsonl"
     state.session_id = ""
     state.exchanges = []
+    state._recall_log = []
     # clear retriever cache
     state._retriever = None
 
@@ -117,11 +119,11 @@ def write_fixture(agent, etype, body, summary, **extra):
         f"type: {etype}",
         f"tier: hot",
         f"summary: {summary}",
-        f"project_id: test",
-        f"session_id: sess-test",
+        f"project_id: {extra.get('project_id', 'test')}",
+        f"session_id: {extra.get('session_id', 'sess-test')}",
     ]
     for k, v in extra.items():
-        if k != "platform" and v:
+        if k not in ("platform", "project_id", "session_id") and v:
             lines.append(f"{k}: {v}")
     lines.extend(["---", "", body])
     path = fabric_dir / filename
@@ -727,6 +729,80 @@ if any("architecture" in str(e.get("summary", "")).lower() for e in excluded_ent
     ok("low-value unverified session excluded from high-precision")
 else:
     bad("low-value session not excluded from high-precision")
+
+
+# ══════════════════════════════════════════════════════════
+print("\nsession scoring + corpus report")
+print("")
+# ══════════════════════════════════════════════════════════
+
+clean_fabric()
+reset_agent("alice")
+
+# unrelated telemetry from another session/agent should not affect current score
+state._TELEMETRY_FILE.write_text("\n".join([
+    json.dumps({
+        "event": "recall", "result_ids": ["old1"], "session_id": "old-session", "agent": "bob"
+    }),
+    json.dumps({
+        "event": "usage", "entry_id": "old1", "session_id": "old-session", "agent": "bob"
+    }),
+]), "utf-8")
+
+state.session_id = "sess-live"
+state.exchanges = [{
+    "user": "Investigate and fix the auth race condition in the Redis-backed limiter under concurrent load.",
+    "assistant": (
+        "We resolved the auth race because the root cause was a non-atomic update path in Redis. "
+        "The result: moved the critical section into a Lua script and validated it with the concurrency test suite."
+    ),
+}]
+scores = state.score_session()
+if scores.get("recall_usage") == 0.0:
+    ok("session scoring ignores telemetry from other sessions and agents")
+else:
+    bad(f"session scoring leaked unrelated telemetry: recall_usage={scores.get('recall_usage')}")
+
+# unlinked session entries should not count as linked workflow entries
+write_fixture("alice", "task", "Investigate auth bug.", "auth bug task", session_id="sess-live")
+write_fixture("alice", "code-session", "Implemented the auth fix.", "auth fix", session_id="sess-live")
+write_fixture("alice", "decision", "Decided to ship the auth fix.", "auth ship decision", session_id="sess-live")
+scores2 = state.score_session()
+if scores2.get("linked_entries") == 0.0:
+    ok("session scoring does not treat unlinked note volume as linked workflow activity")
+else:
+    bad(f"unlinked entries inflated linked_entries score: {scores2.get('linked_entries')}")
+
+clean_fabric()
+reset_agent("alice")
+state.session_id = "sess-linked"
+state.exchanges = [{
+    "user": "Fix and review the rate limiter race under load with a full correction loop.",
+    "assistant": (
+        "We resolved the rate limiter race because the root cause was a non-atomic Redis sequence. "
+        "The result: reviewer feedback was incorporated and the fix passed load testing."
+    ),
+}]
+_, base_id = write_fixture("alice", "code-session", "Built initial limiter.", "initial limiter", session_id="sess-linked")
+write_fixture("bob", "review", "Need atomic update path.", "reviewed limiter", review_of=f"alice:{base_id}", session_id="sess-linked")
+write_fixture("alice", "code-session", "Added atomic Lua script.", "revised limiter", revises=f"alice:{base_id}", session_id="sess-linked")
+scores3 = state.score_session()
+if scores3.get("linked_entries") == 1.0:
+    ok("session scoring gives full linked_entries credit to a real review/revise chain")
+else:
+    bad(f"linked review/revise chain scored incorrectly: {scores3.get('linked_entries')}")
+
+clean_fabric()
+reset_agent("alice")
+write_fixture("alice", "task", "High and verified.", "high verified", training_value="high", verified="true")
+write_fixture("alice", "task", "Verified only.", "verified only", verified="true")
+write_fixture("alice", "task", "High only.", "high only", training_value="high")
+write_fixture("alice", "task", "Neither.", "neither")
+report = state.build_weekly_report()
+if report.get("trainable_estimate") == 3:
+    ok("corpus report trainable_estimate counts the union of high and verified entries")
+else:
+    bad(f"trainable_estimate double-counted overlap: {report.get('trainable_estimate')}")
 
 
 # ══════════════════════════════════════════════════════════
