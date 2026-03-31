@@ -77,6 +77,8 @@ def register(ctx):
                       schema=schemas.FABRIC_TELEMETRY, handler=tools.fabric_telemetry)
     ctx.register_tool(name="fabric_init_obsidian", toolset="fabric",
                       schema=schemas.FABRIC_INIT_OBSIDIAN, handler=tools.fabric_init_obsidian)
+    ctx.register_tool(name="fabric_report", toolset="fabric",
+                      schema=schemas.FABRIC_REPORT, handler=tools.fabric_report)
 
     # hooks
     ctx.register_hook("on_session_start", hooks.on_session_start)
@@ -84,4 +86,4 @@ def register(ctx):
     ctx.register_hook("post_llm_call", hooks.post_llm_call)
     ctx.register_hook("on_session_end", hooks.on_session_end)
 
-    logger.info("icarus v3 registered (15 tools, 4 hooks)")
+    logger.info("icarus v3 registered (16 tools, 4 hooks)")

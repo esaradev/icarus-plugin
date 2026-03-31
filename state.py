@@ -23,6 +23,17 @@ PLUGIN_DIR = Path(__file__).parent
 if not AGENT_NAME and HERMES_HOME and ".hermes-" in str(HERMES_HOME):
     AGENT_NAME = str(HERMES_HOME).split(".hermes-")[-1].rstrip("/")
 
+# ── Shared regexes (used by hooks.py and scoring) ────────
+DECISION_RE = re.compile(
+    r"(?i)\b(decided|resolved|completed|fixed|deployed|shipped|reviewed|approved|rejected)\b"
+)
+OUTCOME_RE = re.compile(
+    r"(?i)(result:|outcome:|conclusion:|because|root cause|instead of|\d+%|\d+x)"
+)
+COMPLETION_RE = re.compile(
+    r"(?i)\b(completed|finished|done|shipped|deployed|resolved|closed|merged|fixed)\b"
+)
+
 # ── Session state ────────────────────────────────────────
 session_id = ""
 exchanges: list = []
@@ -934,6 +945,134 @@ def rollback_model():
         "status": "rolled_back",
         "from_model": current_model,
         "to_model": restored_model,
+    }
+
+
+# ── Session scoring ───────────────────────────────────────
+
+def _count_session_entries():
+    """Count entries written during the current session."""
+    if not session_id or not FABRIC_DIR.exists():
+        return 0
+    count = 0
+    for f in FABRIC_DIR.glob("*.md"):
+        head = f.read_text("utf-8")[:400]
+        if f"session_id: {session_id}" in head:
+            count += 1
+    return count
+
+
+def list_session_entries():
+    """List entries written during the current session."""
+    if not session_id or not FABRIC_DIR.exists():
+        return []
+    results = []
+    for f in sorted(FABRIC_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime):
+        head = f.read_text("utf-8")[:400]
+        if f"session_id: {session_id}" not in head:
+            continue
+        h = _parse_head(f)
+        results.append(h)
+    return results
+
+
+def score_session():
+    """Score the current session quality. Returns component scores and total."""
+    scores = {}
+
+    substantive = [ex for ex in exchanges if len(ex.get("assistant", "").strip()) > 100]
+    scores["depth"] = min(len(substantive) / 5, 1.0)
+
+    all_text = " ".join(ex.get("assistant", "") for ex in exchanges)
+    has_decision = bool(DECISION_RE.search(all_text))
+    has_outcome = bool(OUTCOME_RE.search(all_text))
+    scores["decision"] = 1.0 if (has_decision and has_outcome) else (0.5 if has_decision else 0.0)
+
+    tel = get_telemetry(last_n=100)
+    scores["recall_usage"] = tel.get("summary", {}).get("usage_rate", 0.0)
+
+    scores["linked_entries"] = min(_count_session_entries() / 3, 1.0)
+
+    substantial_user = sum(1 for ex in exchanges if len(ex.get("user", "").strip()) > 50)
+    scores["user_engagement"] = min(substantial_user / 3, 1.0)
+
+    weights = {"depth": 2, "decision": 3, "recall_usage": 2, "linked_entries": 2, "user_engagement": 1}
+    total = sum(scores[k] * weights[k] for k in scores) / sum(weights.values())
+    scores["total"] = round(total, 2)
+
+    return scores
+
+
+# ── Corpus reporting ─────────────────────────────────────
+
+def get_entry_usage_stats():
+    """Per-entry-type recall and usage rates from telemetry."""
+    tel = get_telemetry(last_n=500)
+    recalled_ids = set()
+    used_ids = set()
+    for event in tel.get("events", []):
+        if event.get("event") == "recall":
+            recalled_ids.update(event.get("result_ids", []))
+        elif event.get("event") == "usage":
+            eid = event.get("entry_id", "")
+            if eid:
+                used_ids.add(eid)
+
+    type_recalled: dict = {}
+    type_used: dict = {}
+    if FABRIC_DIR.exists():
+        for f in FABRIC_DIR.glob("*.md"):
+            h = _parse_head(f)
+            eid = h.get("id", "")
+            etype = h.get("type", "unknown")
+            if eid in recalled_ids:
+                type_recalled[etype] = type_recalled.get(etype, 0) + 1
+            if eid in used_ids:
+                type_used[etype] = type_used.get(etype, 0) + 1
+
+    all_types = sorted(set(list(type_recalled.keys()) + list(type_used.keys())))
+    return {
+        "by_type": {
+            t: {
+                "recalled": type_recalled.get(t, 0),
+                "used": type_used.get(t, 0),
+                "usage_rate": round(type_used.get(t, 0) / max(type_recalled.get(t, 0), 1), 2),
+            }
+            for t in all_types
+        },
+    }
+
+
+def build_weekly_report():
+    """Corpus health report: entry types, training values, recall stats."""
+    entries = []
+    if FABRIC_DIR.exists():
+        for f in FABRIC_DIR.glob("*.md"):
+            entries.append(_parse_head(f))
+
+    by_type: dict = {}
+    by_tv = {"high": 0, "normal": 0, "low": 0, "unset": 0}
+    verified_count = 0
+
+    for e in entries:
+        t = e.get("type", "unknown")
+        by_type[t] = by_type.get(t, 0) + 1
+        tv = e.get("training_value", "")
+        by_tv[tv if tv in by_tv else "unset"] += 1
+        if str(e.get("verified", "")).lower() == "true":
+            verified_count += 1
+
+    usage_stats = get_entry_usage_stats()
+    tel = get_telemetry(last_n=200)
+
+    return {
+        "total_entries": len(entries),
+        "by_type": by_type,
+        "by_training_value": by_tv,
+        "verified_entries": verified_count,
+        "recall_usage": tel.get("summary", {}),
+        "usage_by_type": usage_stats.get("by_type", {}),
+        "trainable_estimate": by_tv.get("high", 0) + verified_count,
     }
 
 

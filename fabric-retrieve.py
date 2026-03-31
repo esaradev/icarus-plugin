@@ -18,6 +18,16 @@ from pathlib import Path
 
 FABRIC_DIR = Path(os.environ.get("FABRIC_DIR", Path.home() / "fabric"))
 
+
+def _strip_generated_obsidian_sections(body: str) -> str:
+    body = re.sub(
+        r"\n*<!-- ICARUS_OBSIDIAN_LINKS_START -->.*?<!-- ICARUS_OBSIDIAN_LINKS_END -->\n*",
+        "\n",
+        body,
+        flags=re.DOTALL,
+    )
+    return body.strip()
+
 STOP_WORDS = {"the", "a", "an", "is", "was", "are", "were", "be", "been", "being",
               "have", "has", "had", "do", "does", "did", "will", "would", "could",
               "should", "may", "might", "shall", "can", "to", "of", "in", "for",
@@ -70,7 +80,7 @@ def parse_entry(filepath):
             elif stripped.endswith(":") and not stripped.startswith("-"):
                 current_key = stripped[:-1].strip()
                 meta[current_key] = []
-    meta["_body"] = parts[2].strip()
+    meta["_body"] = _strip_generated_obsidian_sections(parts[2])
     meta["_file"] = filepath.name
     meta["_full"] = text
     return meta

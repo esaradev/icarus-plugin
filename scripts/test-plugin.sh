@@ -796,7 +796,13 @@ else:
     bad("obsidian: daily note not created")
 
 # test init_obsidian
-from obsidian import init_obsidian as _init_obs
+import importlib.util as _importlib_util
+_obsidian_path = repo_dir / "obsidian.py"
+_obsidian_spec = _importlib_util.spec_from_file_location("icarus_obsidian", _obsidian_path)
+_obsidian_mod = _importlib_util.module_from_spec(_obsidian_spec)
+assert _obsidian_spec and _obsidian_spec.loader, "failed to load obsidian.py"
+_obsidian_spec.loader.exec_module(_obsidian_mod)
+_init_obs = _obsidian_mod.init_obsidian
 init_result = _init_obs(fabric_dir)
 if init_result.get("status") in ("initialized", "already_initialized"):
     ok("obsidian: init_obsidian runs successfully")

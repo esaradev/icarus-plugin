@@ -7,21 +7,8 @@ from . import state
 
 logger = logging.getLogger(__name__)
 
-# ── Narrow regex for entry writing (decisions worth persisting) ──
-_DECISION_RE = re.compile(
-    r"(?i)\b(decided|resolved|completed|fixed|deployed|shipped|reviewed|approved|rejected)\b"
-)
-_OUTCOME_RE = re.compile(
-    r"(?i)(result:|outcome:|conclusion:|because|root cause|instead of|\d+%|\d+x)"
-)
-_COMPLETION_RE = re.compile(
-    r"(?i)\b(completed|finished|done|shipped|deployed|resolved|closed|merged|fixed)\b"
-)
-_REVIEW_RE = re.compile(
-    r"(?i)\b(reviewed|review:|feedback:|MUST FIX|SHOULD FIX|approved|rejected|looks good|lgtm|nit:)\b"
-)
-
-# ── Broad regex for creative tracking (theme extraction, not entry writing) ──
+# use shared regexes from state for decision/outcome/completion detection
+# keep local regexes only for creative tracking (broader set)
 _THEME_RE = re.compile(
     r"(?i)\b(decided|resolved|completed|fixed|deployed|shipped|reviewed|approved|rejected|built|created)\b"
 )
@@ -185,16 +172,15 @@ def post_llm_call(session_id="", user_message="", assistant_response="", platfor
     plat = platform or "cli"
 
     # capture decisions: requires decision + outcome in response, AND a substantial
-    # user request (>50 chars) to ground the claim. stores both task and result
-    # so training pairs have real context, not just assistant prose.
+    # user request (>50 chars) to ground the claim
     user_text = (user_message or "").strip()
-    if (_DECISION_RE.search(assistant_response)
-            and _OUTCOME_RE.search(assistant_response)
+    if (state.DECISION_RE.search(assistant_response)
+            and state.OUTCOME_RE.search(assistant_response)
             and len(assistant_response) > 200
             and len(user_text) > 50):
         body = f"Task: {user_text[:300]}\n\nResult: {assistant_response[:500]}"
         summary = assistant_response[:80].replace("\n", " ")
-        entry_status = "completed" if _COMPLETION_RE.search(assistant_response) else ""
+        entry_status = "completed" if state.COMPLETION_RE.search(assistant_response) else ""
         state.write_entry("decision", body, summary,
                          platform=plat, status=entry_status, training_value="high")
 
@@ -228,28 +214,63 @@ def post_llm_call(session_id="", user_message="", assistant_response="", platfor
 
 
 def on_session_end(session_id="", platform="", completed=False, **kwargs):
-    """Write session summary only if the session had substantive work."""
+    """Score session, write structured note if quality is sufficient."""
     creative = state.load_creative()
-
-    # always update MEMORY.md
     state.write_memory_file(creative)
 
     if not state.exchanges:
         return
 
-    plat = platform or "cli"
+    scores = state.score_session()
 
-    # only consider substantial exchanges (assistant response > 100 chars)
-    substantive = [ex for ex in state.exchanges
-                   if len(ex.get("assistant", "").strip()) > 100]
-    if len(substantive) < 2:
+    # skip: score too low for any note
+    if scores["total"] < 0.2:
         return
 
-    # write the single best exchange, not a join of 5
-    best = max(substantive, key=lambda ex: len(ex.get("assistant", "")))
-    content = best["assistant"]
+    plat = platform or "cli"
+
+    # build structured content
+    parts = []
+
+    # task: first substantial user message
+    first_user = next(
+        (ex["user"] for ex in state.exchanges if len(ex.get("user", "").strip()) > 50),
+        None
+    )
+    if first_user:
+        parts.append(f"## Task\n{first_user}")
+
+    # decision: first exchange with decision pattern
+    for ex in state.exchanges:
+        resp = ex.get("assistant", "")
+        if state.DECISION_RE.search(resp) and len(resp) > 100:
+            parts.append(f"## Decision\n{resp[:500]}")
+            break
+
+    # result: last substantial assistant response
+    substantive = [ex for ex in state.exchanges if len(ex.get("assistant", "").strip()) > 100]
+    if substantive:
+        parts.append(f"## Result\n{substantive[-1]['assistant'][:500]}")
+
+    # entries created during this session
+    session_entries = state.list_session_entries()
+    if session_entries:
+        links = [
+            f"- {e.get('type', '?')}: {e.get('summary', '?')} (id {e.get('id', '?')})"
+            for e in session_entries[:5]
+        ]
+        parts.append("## Entries created\n" + "\n".join(links))
+
+    content = "\n\n".join(parts) if parts else state.exchanges[-1].get("assistant", "")[:500]
     summary = content[:80].replace("\n", " ")
 
-    tv = "high" if (_DECISION_RE.search(content) or _COMPLETION_RE.search(content)) else "low"
+    # map score to training_value
+    if scores["total"] >= 0.6:
+        tv = "high"
+    elif scores["total"] >= 0.3:
+        tv = "normal"
+    else:
+        tv = "low"
 
-    state.write_entry("session", content, summary, platform=plat, training_value=tv)
+    state.write_entry("session", content, summary, platform=plat,
+                     training_value=tv, status="completed")

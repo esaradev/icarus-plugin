@@ -19,6 +19,16 @@ from pathlib import Path
 FABRIC_DIR = Path(os.environ.get("FABRIC_DIR", Path.home() / "fabric"))
 
 
+def _strip_generated_obsidian_sections(body: str) -> str:
+    body = re.sub(
+        r"\n*<!-- ICARUS_OBSIDIAN_LINKS_START -->.*?<!-- ICARUS_OBSIDIAN_LINKS_END -->\n*",
+        "\n",
+        body,
+        flags=re.DOTALL,
+    )
+    return body.strip()
+
+
 def parse_entry(filepath):
     """Parse a fabric markdown entry into a dict."""
     text = filepath.read_text(encoding="utf-8")
@@ -53,7 +63,7 @@ def parse_entry(filepath):
             elif stripped.endswith(":") and not stripped.startswith("-"):
                 current_key = stripped[:-1].strip()
                 meta[current_key] = []
-    meta["body"] = parts[2].strip()
+    meta["body"] = _strip_generated_obsidian_sections(parts[2])
     meta["file"] = filepath.name
     return meta
 
@@ -182,6 +192,17 @@ def extract_pairs(entries):
             add_pair(user_msg, body, {**base_meta, "type": "decision"})
 
         elif entry_type == "session":
+            # structured session: extract task->result pair if present
+            if "## Task" in body and "## Result" in body:
+                task_match = re.search(r"## Task\n(.+?)(?=\n## |\Z)", body, re.DOTALL)
+                result_match = re.search(r"## Result\n(.+?)(?=\n## |\Z)", body, re.DOTALL)
+                if task_match and result_match:
+                    add_pair(
+                        f"[session-task] {task_match.group(1).strip()[:300]}",
+                        result_match.group(1).strip()[:500],
+                        {**base_meta, "type": "session-structured"},
+                    )
+            # always also add the generic session pair
             user_msg = f"[session] Summarize what was accomplished."
             add_pair(user_msg, body, {**base_meta, "type": "session"})
 
@@ -365,15 +386,25 @@ def main():
         print("no training pairs extracted")
         sys.exit(0)
 
-    # weight high-value pairs (verified entries get extra boost)
+    # weight high-value pairs (verified + cross-agent + structured get extra boost)
     weighted = []
     for p in pairs:
         meta = p.get("metadata", {})
         ptype = meta.get("type", "")
         tv = meta.get("training_value", "")
         is_verified = meta.get("verified", False)
+        author = meta.get("author", "")
+        reviewer = meta.get("reviewer", "")
+        is_cross_agent = bool(author and reviewer and author != reviewer)
         if ptype == "review-correction":
-            weighted.extend([p] * (4 if is_verified else 3))
+            if is_cross_agent and is_verified:
+                weighted.extend([p] * 5)
+            elif is_cross_agent or is_verified:
+                weighted.extend([p] * 4)
+            else:
+                weighted.extend([p] * 3)
+        elif ptype == "session-structured" and tv == "high":
+            weighted.extend([p] * 3)
         elif tv == "high":
             weighted.extend([p] * (3 if is_verified else 2))
         elif is_verified:

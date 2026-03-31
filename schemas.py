@@ -394,3 +394,18 @@ FABRIC_INIT_OBSIDIAN = {
         "required": [],
     },
 }
+
+FABRIC_REPORT = {
+    "name": "fabric_report",
+    "description": (
+        "Corpus health report. Shows: entry counts by type and training value, "
+        "verified entry count, recall usage rates by entry type, and estimated "
+        "trainable corpus size. Use periodically to understand whether your "
+        "memory is producing good training data."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+}

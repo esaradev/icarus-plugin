@@ -18,6 +18,9 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+LINKS_START = "<!-- ICARUS_OBSIDIAN_LINKS_START -->"
+LINKS_END = "<!-- ICARUS_OBSIDIAN_LINKS_END -->"
+
 
 def _find_entry_file(ref: str, fabric_dir: Path) -> Optional[str]:
     """Resolve agent:id ref to a filename (without .md extension)."""
@@ -62,9 +65,22 @@ def format_entry(filepath: Path, fabric_dir: Path, review_of: str = "", revises:
         else:
             links.append(f"- Revises: {revises}")
 
-    if links:
-        section = "\n\n## Links\n" + "\n".join(links) + "\n"
-        filepath.write_text(text.rstrip() + section, "utf-8")
+    if not links:
+        return
+
+    generated = (
+        f"\n\n{LINKS_START}\n"
+        "## Links\n"
+        + "\n".join(links)
+        + f"\n{LINKS_END}\n"
+    )
+
+    existing = re.compile(
+        rf"\n*{re.escape(LINKS_START)}.*?{re.escape(LINKS_END)}\n*",
+        re.DOTALL,
+    )
+    text = existing.sub("\n", text).rstrip()
+    filepath.write_text(text + generated, "utf-8")
 
 
 def ensure_daily_note(fabric_dir: Path, entry_filename: str, summary: str):
@@ -72,7 +88,7 @@ def ensure_daily_note(fabric_dir: Path, entry_filename: str, summary: str):
     daily_dir = fabric_dir / "daily"
     daily_dir.mkdir(parents=True, exist_ok=True)
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now().strftime("%Y-%m-%d")
     daily_path = daily_dir / f"{today}.md"
 
     stem = entry_filename.replace(".md", "")
