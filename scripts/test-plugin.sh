@@ -464,6 +464,271 @@ else:
 
 
 # ══════════════════════════════════════════════════════════
+print("\nend-to-end: write -> export -> inspect JSONL")
+print("")
+# ══════════════════════════════════════════════════════════
+
+clean_fabric()
+reset_agent("alice")
+
+# write a linked chain using the actual plugin tools
+r1 = json.loads(tools.fabric_write({
+    "type": "code-session",
+    "content": "Implemented JWT refresh token rotation with 7-day expiry.",
+    "summary": "jwt refresh rotation",
+    "status": "open",
+    "assigned_to": "bob",
+    "training_value": "high",
+    "verified": "true",
+    "evidence": "tests pass, 12/12 auth tests green",
+    "source_tool": "code_editor",
+    "artifact_paths": "src/auth.ts, tests/auth.test.ts",
+}))
+assert r1.get("status") == "written", f"e2e write 1 failed: {r1}"
+orig_id = parse_id(r1["path"])
+
+reset_agent("bob")
+r2 = json.loads(tools.fabric_write({
+    "type": "review",
+    "content": "MUST FIX: refresh tokens stored in plain text. Hash with bcrypt before storing.",
+    "summary": "reviewed jwt: plaintext token storage",
+    "review_of": f"alice:{orig_id}",
+    "status": "completed",
+    "outcome": "MUST FIX plaintext storage",
+}))
+assert r2.get("status") == "written", f"e2e write 2 failed: {r2}"
+
+reset_agent("alice")
+r3 = json.loads(tools.fabric_write({
+    "type": "code-session",
+    "content": "Added bcrypt hashing for refresh tokens before database storage.",
+    "summary": "fixed jwt: bcrypt token hashing",
+    "revises": f"alice:{orig_id}",
+    "status": "completed",
+    "verified": "true",
+    "evidence": "tests pass after adding bcrypt",
+}))
+assert r3.get("status") == "written", f"e2e write 3 failed: {r3}"
+
+# export with subprocess (the real CLI path)
+import subprocess, tempfile
+with tempfile.TemporaryDirectory() as export_dir:
+    exp_result = subprocess.run(
+        ["python3", str(repo_dir / "export-training.py"), "--output", export_dir,
+         "--fabric-dir", str(fabric_dir), "--mode", "high-precision"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert exp_result.returncode == 0, f"export failed: {exp_result.stderr}"
+
+    # inspect together.jsonl
+    together_path = Path(export_dir) / "together.jsonl"
+    assert together_path.exists(), "together.jsonl not produced"
+    lines = [json.loads(l) for l in together_path.read_text().strip().split("\n") if l.strip()]
+
+    ok(f"e2e export produced {len(lines)} JSONL lines")
+
+    # verify structure: system + user + assistant
+    for i, line in enumerate(lines):
+        msgs = line.get("messages", [])
+        assert len(msgs) >= 3, f"line {i}: expected 3+ messages, got {len(msgs)}"
+        assert msgs[0]["role"] == "system", f"line {i}: first role should be system"
+        assert msgs[-1]["role"] == "assistant", f"line {i}: last role should be assistant"
+    ok("all JSONL lines have system+user+assistant structure")
+
+    # verify review-correction pair exists
+    rc_found = any("self-correct" in l["messages"][1]["content"].lower() for l in lines)
+    if rc_found:
+        ok("e2e JSONL contains review-correction pair")
+    else:
+        bad("e2e JSONL missing review-correction pair")
+
+    # verify verified entry appears in high-precision mode
+    verified_ref = any("jwt" in l["messages"][1]["content"].lower() for l in lines)
+    if verified_ref:
+        ok("verified entry included in high-precision export")
+    else:
+        bad("verified entry missing from high-precision export")
+
+
+# ══════════════════════════════════════════════════════════
+print("\nretrieval quality: ranking, not just presence")
+print("")
+# ══════════════════════════════════════════════════════════
+
+clean_fabric()
+reset_agent("alice")
+
+# create entries with varying relevance to "rate limiter redis"
+write_fixture("alice", "code-session",
+    "Built sliding window rate limiter using Redis sorted sets with per-route config.",
+    "rate limiter implementation with redis sorted sets",
+    tags="rate-limiter, redis", training_value="high", verified="true")
+
+write_fixture("alice", "research",
+    "Researched PostgreSQL partial indexes for query optimization on the billing module.",
+    "postgres partial index research for billing",
+    tags="postgres, billing")
+
+write_fixture("bob", "review",
+    "Reviewed the rate limiter. Found race condition in zadd/zcard under concurrent load.",
+    "reviewed rate limiter: race condition in redis operations",
+    tags="rate-limiter, review")
+
+write_fixture("alice", "code-session",
+    "Built WebSocket pub/sub broker in Node for real-time notifications.",
+    "websocket pub/sub broker for notifications",
+    tags="websocket, node")
+
+write_fixture("alice", "session",
+    "Discussed project timeline and sprint planning for Q2.",
+    "sprint planning discussion Q2")
+
+# load retriever
+ret_spec = importlib.util.spec_from_file_location("fabric_ret", str(repo_dir / "fabric-retrieve.py"))
+ret = importlib.util.module_from_spec(ret_spec)
+ret.FABRIC_DIR = fabric_dir
+ret_spec.loader.exec_module(ret)
+
+# query: "rate limiter redis" -- should rank rate limiter entries above postgres/websocket/sprint
+results = ret.retrieve("rate limiter redis", max_results=5)
+if not results:
+    bad("retrieval returned no results for 'rate limiter redis'")
+else:
+    top = results[0][1]
+    top_summary = top.get("summary", "").lower()
+    if "rate limiter" in top_summary and "redis" in top_summary:
+        ok("top-1 for 'rate limiter redis' is the implementation entry")
+    else:
+        bad(f"top-1 wrong: {top_summary}")
+
+    # verify postgres and sprint are ranked below rate limiter entries
+    rate_limiter_indices = []
+    other_indices = []
+    for i, (score, e) in enumerate(results):
+        s = e.get("summary", "").lower()
+        if "rate limiter" in s or "redis" in s:
+            rate_limiter_indices.append(i)
+        elif "postgres" in s or "sprint" in s or "websocket" in s:
+            other_indices.append(i)
+
+    if rate_limiter_indices and other_indices:
+        if max(rate_limiter_indices) < min(other_indices):
+            ok("all rate limiter entries rank above unrelated entries")
+        else:
+            bad(f"ranking wrong: rate_limiter at {rate_limiter_indices}, others at {other_indices}")
+    elif rate_limiter_indices:
+        ok("only rate limiter entries returned (unrelated filtered out)")
+    else:
+        bad("no rate limiter entries in results")
+
+# query: "billing postgres" -- should rank postgres above rate limiter
+results2 = ret.retrieve("billing postgres", max_results=5)
+if results2:
+    top2 = results2[0][1]
+    if "postgres" in top2.get("summary", "").lower() or "billing" in top2.get("summary", "").lower():
+        ok("top-1 for 'billing postgres' is the postgres entry")
+    else:
+        bad(f"top-1 for billing query wrong: {top2.get('summary','')}")
+else:
+    bad("no results for 'billing postgres'")
+
+# query: "websocket notifications" -- should rank websocket above everything
+results3 = ret.retrieve("websocket notifications", max_results=5)
+if results3:
+    top3 = results3[0][1]
+    if "websocket" in top3.get("summary", "").lower():
+        ok("top-1 for 'websocket notifications' is the websocket entry")
+    else:
+        bad(f"top-1 for websocket query wrong: {top3.get('summary','')}")
+else:
+    bad("no results for 'websocket notifications'")
+
+# ambiguous query: "fix" -- should prefer review (which mentions fix) or code-session
+results4 = ret.retrieve("fix race condition", max_results=3)
+if results4:
+    top4_type = results4[0][1].get("type", "")
+    if top4_type in ("code-session", "review"):
+        ok(f"ambiguous 'fix race condition' returns {top4_type} (not session/research)")
+    else:
+        bad(f"ambiguous query returned {top4_type}")
+else:
+    bad("no results for 'fix race condition'")
+
+
+# ══════════════════════════════════════════════════════════
+print("\nevidence-backed fields")
+print("")
+# ══════════════════════════════════════════════════════════
+
+clean_fabric()
+reset_agent("alice")
+
+# write entry with evidence fields
+r = json.loads(tools.fabric_write({
+    "type": "code-session",
+    "content": "Implemented rate limiter with Redis backend.",
+    "summary": "rate limiter with evidence",
+    "verified": "true",
+    "evidence": "12/12 tests pass, load test 1000 rps stable",
+    "source_tool": "bash",
+    "artifact_paths": "src/limiter.ts, tests/limiter.test.ts",
+    "training_value": "high",
+}))
+assert r.get("status") == "written", f"evidence write failed: {r}"
+
+# read the entry and verify fields are on disk
+content = Path(r["path"]).read_text("utf-8")
+if "verified: true" in content:
+    ok("verified field written to entry")
+else:
+    bad("verified field missing from entry")
+
+if "evidence: 12/12 tests pass" in content:
+    ok("evidence field written to entry")
+else:
+    bad("evidence field missing from entry")
+
+if "source_tool: bash" in content:
+    ok("source_tool field written to entry")
+else:
+    bad("source_tool field missing from entry")
+
+if "artifact_paths:" in content and "src/limiter.ts" in content:
+    ok("artifact_paths field written to entry")
+else:
+    bad("artifact_paths field missing from entry")
+
+# write an unverified entry
+r2 = json.loads(tools.fabric_write({
+    "type": "session",
+    "content": "Had a conversation about architecture options.",
+    "summary": "architecture discussion",
+    "training_value": "low",
+}))
+assert r2.get("status") == "written"
+
+# export in high-precision mode -- verified entry should appear, unverified session should not
+exp.FABRIC_DIR = fabric_dir
+all_e = exp.scan_all()
+hp_entries = [e for e in all_e
+              if e.get("training_value") == "high"
+              or e.get("status") == "completed"
+              or (e.get("type") == "review" and e.get("review_of"))
+              or str(e.get("verified", "")).lower() == "true"]
+excluded_entries = [e for e in all_e if e not in hp_entries]
+
+if any("rate limiter" in str(e.get("summary", "")).lower() for e in hp_entries):
+    ok("verified entry passes high-precision filter")
+else:
+    bad("verified entry excluded from high-precision")
+
+if any("architecture" in str(e.get("summary", "")).lower() for e in excluded_entries):
+    ok("low-value unverified session excluded from high-precision")
+else:
+    bad("low-value session not excluded from high-precision")
+
+
+# ══════════════════════════════════════════════════════════
 print(f"\n{'─' * 40}")
 print(f"  {PASS} passed, {FAIL} failed")
 if FAIL > 0:

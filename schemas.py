@@ -93,6 +93,23 @@ FABRIC_WRITE = {
                 "enum": ["high", "normal", "low"],
                 "description": "Training quality signal. high = decisions with outcomes, completed reviews, successful fixes. low = generic chatter. Affects export filtering.",
             },
+            "verified": {
+                "type": "string",
+                "enum": ["true", "false"],
+                "description": "Whether this outcome was verified (tests passed, deployment succeeded, customer confirmed). Verified entries are preferred in high-precision export.",
+            },
+            "evidence": {
+                "type": "string",
+                "description": "How the outcome was verified. E.g. 'tests pass', 'deployed to prod', 'customer confirmed fix'. Grounds the entry for training.",
+            },
+            "source_tool": {
+                "type": "string",
+                "description": "The tool that produced this result (e.g. 'bash', 'code_editor', 'web_search'). Helps training data reflect real tool use.",
+            },
+            "artifact_paths": {
+                "type": "string",
+                "description": "Comma-separated file paths of artifacts produced (e.g. 'src/limiter.ts, tests/limiter.test.ts').",
+            },
         },
         "required": ["type", "content", "summary"],
     },

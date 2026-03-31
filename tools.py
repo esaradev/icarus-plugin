@@ -66,6 +66,10 @@ def fabric_write(args: dict, **kwargs) -> str:
             customer_id=args.get("customer_id", ""),
             assigned_to=assigned_to,
             training_value=tv,
+            verified=args.get("verified", ""),
+            evidence=args.get("evidence", ""),
+            source_tool=args.get("source_tool", ""),
+            artifact_paths=args.get("artifact_paths", ""),
         )
         return _json({"status": "written", "path": path})
     except Exception as e:

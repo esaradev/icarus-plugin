@@ -89,7 +89,8 @@ def save_creative(s):
 
 def write_entry(entry_type, content, summary, tier="hot", tags="", platform="cli",
                 status="", outcome="", review_of="", revises="", customer_id="",
-                assigned_to="", training_value=""):
+                assigned_to="", training_value="", verified="", evidence="",
+                source_tool="", artifact_paths=""):
     """Write a fabric entry with full schema v1 fields. Returns the filepath."""
     FABRIC_DIR.mkdir(parents=True, exist_ok=True)
     now = datetime.now(timezone.utc)
@@ -133,6 +134,14 @@ def write_entry(entry_type, content, summary, tier="hot", tags="", platform="cli
         lines.append(f"assigned_to: {assigned_to}")
     if training_value:
         lines.append(f"training_value: {training_value}")
+    if verified:
+        lines.append(f"verified: {verified}")
+    if evidence:
+        lines.append(f"evidence: {evidence}")
+    if source_tool:
+        lines.append(f"source_tool: {source_tool}")
+    if artifact_paths:
+        lines.append(f"artifact_paths: [{artifact_paths}]")
     lines.extend(["---", "", content])
 
     path = FABRIC_DIR / filename
@@ -202,7 +211,8 @@ def _parse_head(filepath, max_bytes=800):
     fields = {}
     for key in ("agent", "type", "tier", "status", "summary", "timestamp",
                 "review_of", "revises", "customer_id", "assigned_to", "id",
-                "outcome", "training_value"):
+                "outcome", "training_value", "verified", "evidence",
+                "source_tool", "artifact_paths"):
         m = re.search(rf"^{key}: (.+)$", text, re.MULTILINE)
         if m:
             fields[key] = m.group(1)

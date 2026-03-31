@@ -156,39 +156,38 @@ def extract_pairs(entries):
         summary = e.get("summary", "")
 
         tv = e.get("training_value", "")
+        verified = str(e.get("verified", "")).lower() == "true"
 
         if not body or len(body) < 20:
             continue
 
+        # base metadata shared by all pairs from this entry
+        base_meta = {"agent": agent, "platform": platform, "training_value": tv, "verified": verified}
+
         # ── OUTCOME PAIR: focused summary → outcome ──
         if e.get("outcome"):
-            add_pair(
-                f"[outcome] {summary}",
-                e["outcome"],
-                {"type": "outcome", "agent": agent, "platform": platform, "training_value": tv},
-            )
+            add_pair(f"[outcome] {summary}", e["outcome"], {**base_meta, "type": "outcome"})
 
         # ── BASIC PAIR: type as task, body as response ──
         if entry_type in ("code-session", "task", "resolution", "research"):
             user_msg = f"[{entry_type}] {summary}" if summary else f"Complete this {entry_type}"
-            add_pair(user_msg, body, {"type": "basic", "agent": agent, "platform": platform, "training_value": tv})
+            add_pair(user_msg, body, {**base_meta, "type": "basic"})
 
         elif entry_type == "dialogue":
-            # For dialogue, the thought IS the output
             user_msg = f"[dialogue] Respond as {agent} in a multi-agent conversation."
-            add_pair(user_msg, body, {"type": "dialogue", "agent": agent, "platform": platform, "training_value": tv})
+            add_pair(user_msg, body, {**base_meta, "type": "dialogue"})
 
         elif entry_type == "decision":
             user_msg = f"[decision] What did you decide?"
-            add_pair(user_msg, body, {"type": "decision", "agent": agent, "platform": platform, "training_value": tv})
+            add_pair(user_msg, body, {**base_meta, "type": "decision"})
 
         elif entry_type == "session":
             user_msg = f"[session] Summarize what was accomplished."
-            add_pair(user_msg, body, {"type": "session", "agent": agent, "platform": platform, "training_value": tv})
+            add_pair(user_msg, body, {**base_meta, "type": "session"})
 
         elif entry_type == "review":
             user_msg = f"[review] Review the following code or work."
-            add_pair(user_msg, body, {"type": "review", "agent": agent, "platform": platform, "training_value": tv})
+            add_pair(user_msg, body, {**base_meta, "type": "review"})
 
         else:
             user_msg = f"[{entry_type or 'task'}] {summary or 'Complete this task'}"
@@ -351,7 +350,8 @@ def main():
         entries = [e for e in all_entries
                    if e.get("training_value") == "high"
                    or e.get("status") == "completed"
-                   or (e.get("type") == "review" and e.get("review_of"))]
+                   or (e.get("type") == "review" and e.get("review_of"))
+                   or str(e.get("verified", "")).lower() == "true"]
         excluded = len(all_entries) - len(entries)
     elif args.mode == "normal":
         entries = [e for e in all_entries if e.get("training_value") != "low"]
@@ -365,15 +365,18 @@ def main():
         print("no training pairs extracted")
         sys.exit(0)
 
-    # weight high-value pairs
+    # weight high-value pairs (verified entries get extra boost)
     weighted = []
     for p in pairs:
         meta = p.get("metadata", {})
         ptype = meta.get("type", "")
         tv = meta.get("training_value", "")
+        is_verified = meta.get("verified", False)
         if ptype == "review-correction":
-            weighted.extend([p] * 3)
+            weighted.extend([p] * (4 if is_verified else 3))
         elif tv == "high":
+            weighted.extend([p] * (3 if is_verified else 2))
+        elif is_verified:
             weighted.extend([p] * 2)
         else:
             weighted.append(p)
