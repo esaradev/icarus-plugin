@@ -213,7 +213,7 @@ def extract_pairs(entries):
                 for candidate in entries:
                     if candidate.get("agent") != ref_agent:
                         continue
-                    if candidate.get("timestamp", "") <= e.get("timestamp", ""):
+                    if str(candidate.get("timestamp", "")) <= str(e.get("timestamp", "")):
                         continue
                     if candidate.get("file") == orig_file:
                         continue
@@ -249,7 +249,7 @@ def extract_pairs(entries):
                 ref_agent = ref.split(":")[0] if ":" in ref else ""
                 candidates = [
                     candidate for candidate in entries
-                    if candidate.get("revises") == ref and candidate.get("timestamp", "") > e.get("timestamp", "")
+                    if candidate.get("revises") == ref
                 ]
                 if candidates:
                     improved = max(candidates, key=_timestamp_sort_key)
