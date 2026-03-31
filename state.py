@@ -289,7 +289,12 @@ def write_entry(entry_type, content, summary, tier="hot", tags="", platform="cli
     ts_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     agent = AGENT_NAME or "agent"
     suffix = secrets.token_hex(2)
-    filename = f"{agent}-{entry_type}-{ts}-{suffix}.md"
+    # derive a short slug from the summary for human-readable filenames
+    slug = re.sub(r"[^a-z0-9]+", "-", summary.lower().strip())[:40].strip("-")
+    if slug:
+        filename = f"{agent}-{entry_type}-{slug}-{suffix}.md"
+    else:
+        filename = f"{agent}-{entry_type}-{ts}-{suffix}.md"
 
     sid = session_id or os.environ.get(
         "FABRIC_SESSION_ID", f"sess-{now.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}")
