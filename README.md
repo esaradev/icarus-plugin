@@ -72,7 +72,8 @@ Icarus is **not** an Obsidian plugin. Obsidian is an optional viewer/editor for 
 
 ```bash
 git clone https://github.com/esaradev/icarus-plugin.git
-cp -r icarus-plugin ~/.hermes/plugins/icarus
+mkdir -p ~/.hermes/plugins/icarus
+cp -r icarus-plugin/* ~/.hermes/plugins/icarus/
 ```
 
 ### 2. Set environment variables
@@ -260,8 +261,9 @@ Export modes:
 ```bash
 hermes profile create coder
 hermes profile create reviewer --clone
-cp -r icarus-plugin ~/.hermes/profiles/coder/plugins/icarus
-cp -r icarus-plugin ~/.hermes/profiles/reviewer/plugins/icarus
+mkdir -p ~/.hermes-coder/plugins/icarus ~/.hermes-reviewer/plugins/icarus
+cp -r icarus-plugin/* ~/.hermes-coder/plugins/icarus/
+cp -r icarus-plugin/* ~/.hermes-reviewer/plugins/icarus/
 hermes -p coder chat
 ```
 
@@ -282,8 +284,9 @@ fallback_model:
 
 **"tool not found" when calling fabric_write or fabric_recall**
 - Run `/plugins` in Hermes. If Icarus isn't listed, the plugin isn't installed in the right directory.
-- Check: `ls ~/.hermes/plugins/icarus/__init__.py` (global) or `ls ~/.hermes/profiles/YOUR_PROFILE/plugins/icarus/__init__.py` (per-profile).
+- Check: `ls ~/.hermes/plugins/icarus/__init__.py` (global) or `ls ~/.hermes-YOUR_PROFILE/plugins/icarus/__init__.py` (profile-specific Hermes home).
 - The plugin needs `__init__.py`, `plugin.yaml`, and all `.py` files in the same directory.
+- If you copied the repo twice, make sure you do **not** have a nested path like `~/.hermes/plugins/icarus/icarus-plugin/__init__.py`.
 
 **Notes not showing in Obsidian**
 - Check `FABRIC_DIR` points to a directory inside your Obsidian vault.
