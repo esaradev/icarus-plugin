@@ -858,7 +858,7 @@ else:
     bad(f"obsidian: wikilink not found (expected [[{target_filename}]])")
 
 # verify daily note created
-today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+today = datetime.now().strftime("%Y-%m-%d")
 daily_path = fabric_dir / "daily" / f"{today}.md"
 if daily_path.exists():
     ok("obsidian: daily note created")
@@ -879,17 +879,26 @@ _obsidian_mod = _importlib_util.module_from_spec(_obsidian_spec)
 assert _obsidian_spec and _obsidian_spec.loader, "failed to load obsidian.py"
 _obsidian_spec.loader.exec_module(_obsidian_mod)
 _init_obs = _obsidian_mod.init_obsidian
+vault_dir = home_dir / "vault-root"
+os.environ["OBSIDIAN_VAULT_PATH"] = str(vault_dir)
 init_result = _init_obs(fabric_dir)
 if init_result.get("status") in ("initialized", "already_initialized"):
     ok("obsidian: init_obsidian runs successfully")
 else:
     bad(f"obsidian: init_obsidian failed: {init_result}")
 
-obs_app = fabric_dir / ".obsidian" / "app.json"
-if obs_app.exists():
-    ok("obsidian: .obsidian/app.json created")
+if init_result.get("vault_dir") == str(vault_dir):
+    ok("obsidian: init_obsidian uses OBSIDIAN_VAULT_PATH as vault root")
 else:
-    bad("obsidian: .obsidian/app.json missing")
+    bad(f"obsidian: wrong vault_dir returned: {init_result.get('vault_dir')}")
+
+obs_app = vault_dir / ".obsidian" / "app.json"
+if obs_app.exists():
+    ok("obsidian: .obsidian/app.json created at vault root")
+else:
+    bad("obsidian: .obsidian/app.json missing at vault root")
+
+del os.environ["OBSIDIAN_VAULT_PATH"]
 
 # disable obsidian and verify no links added
 del os.environ["ICARUS_OBSIDIAN"]

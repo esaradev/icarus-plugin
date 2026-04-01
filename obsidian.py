@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -103,6 +104,14 @@ def ensure_daily_note(fabric_dir: Path, entry_filename: str, summary: str):
         daily_path.write_text(f"# {today}\n\n{link_line}", "utf-8")
 
 
+def _vault_dir_for(fabric_dir: Path) -> Path:
+    """Resolve the Obsidian vault root for config files."""
+    configured = os.environ.get("OBSIDIAN_VAULT_PATH", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return fabric_dir
+
+
 def init_obsidian(fabric_dir: Path) -> dict:
     """One-time Obsidian vault setup for a fabric directory."""
     created = []
@@ -112,7 +121,10 @@ def init_obsidian(fabric_dir: Path) -> dict:
         daily_dir.mkdir(parents=True, exist_ok=True)
         created.append(str(daily_dir))
 
-    obsidian_dir = fabric_dir / ".obsidian"
+    vault_dir = _vault_dir_for(fabric_dir)
+    vault_dir.mkdir(parents=True, exist_ok=True)
+
+    obsidian_dir = vault_dir / ".obsidian"
     if not obsidian_dir.exists():
         obsidian_dir.mkdir(parents=True, exist_ok=True)
         created.append(str(obsidian_dir))
@@ -131,5 +143,6 @@ def init_obsidian(fabric_dir: Path) -> dict:
     return {
         "status": "initialized" if created else "already_initialized",
         "fabric_dir": str(fabric_dir),
+        "vault_dir": str(vault_dir),
         "created": created,
     }
