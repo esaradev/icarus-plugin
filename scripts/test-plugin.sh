@@ -729,6 +729,104 @@ else:
 
 
 # ══════════════════════════════════════════════════════════
+print("\ntraining quality selection")
+print("")
+# ══════════════════════════════════════════════════════════
+
+clean_fabric()
+reset_agent("alice")
+
+write_fixture("alice", "session",
+    "Talked about roadmap and broad ideas without a concrete result.",
+    "generic session chatter")
+
+write_fixture("alice", "session",
+    "## Task\nFix the auth retry loop.\n\n## Result\nRetry loop fixed and tests passed.",
+    "structured auth retry session",
+    training_value="normal")
+
+write_fixture("alice", "task",
+    "Implemented billing webhook retry dedupe.",
+    "billing retry dedupe",
+    verified="true",
+    evidence="tests passed")
+
+training_entries = exp.scan_all()
+normal_entries = [e for e in training_entries if exp._entry_quality(e)["is_normal"]]
+
+if any("structured auth retry session" in str(e.get("summary", "")) for e in normal_entries):
+    ok("normal export keeps structured session notes")
+else:
+    bad("normal export excluded structured session note")
+
+if not any("generic session chatter" in str(e.get("summary", "")) for e in normal_entries):
+    ok("normal export excludes noisy unstructured session notes")
+else:
+    bad("normal export kept noisy unstructured session note")
+
+# start_training auto-selects highest-quality viable mode and records dataset metadata
+clean_fabric()
+reset_agent("trainbot")
+(home_dir / ".env").write_text("TOGETHER_API_KEY=tok-test\n", "utf-8")
+state._REGISTRY_FILE.write_text(json.dumps({"models": [], "active_model": None}), "utf-8")
+
+orig_export_training = state.export_training
+orig_urlopen = state.urllib.request.urlopen
+orig_together_request = state._together_request
+
+class _FakeResp:
+    def __init__(self, payload):
+        self.payload = payload
+    def read(self):
+        return json.dumps(self.payload).encode("utf-8")
+
+def fake_export_training(mode="normal"):
+    table = {
+        "high-precision": {"pairs": 8, "estimated_tokens": 1200, "pair_types": {"review-correction": 8}, "_training_data": "{}", "training_data_path": "/tmp/hp"},
+        "normal": {"pairs": 14, "estimated_tokens": 2400, "pair_types": {"review-correction": 6, "basic": 8}, "_training_data": "{}", "training_data_path": "/tmp/normal"},
+        "high-volume": {"pairs": 20, "estimated_tokens": 4000, "pair_types": {"basic": 20}, "_training_data": "{}", "training_data_path": "/tmp/hv"},
+    }
+    return {"mode": mode, "output": "", **table[mode]}
+
+def fake_urlopen(req, timeout=60):
+    return _FakeResp({"id": "file-test-123"})
+
+def fake_together_request(method, url, data=None):
+    return {"id": "ft-job-123"}
+
+state.export_training = fake_export_training
+state.urllib.request.urlopen = fake_urlopen
+state._together_request = fake_together_request
+
+train_result = state.start_training(suffix="trainbot-v2", min_pairs=10)
+
+state.export_training = orig_export_training
+state.urllib.request.urlopen = orig_urlopen
+state._together_request = orig_together_request
+
+if train_result.get("mode") == "normal":
+    ok("training auto-selects normal mode when high-precision lacks enough pairs")
+else:
+    bad(f"training picked wrong export mode: {train_result}")
+
+if train_result.get("pair_types", {}).get("review-correction") == 6:
+    ok("training result includes pair type composition")
+else:
+    bad(f"training result missing pair type composition: {train_result}")
+
+registry_after = json.loads(state._REGISTRY_FILE.read_text("utf-8"))
+if registry_after["models"] and registry_after["models"][0].get("export_mode") == "normal":
+    ok("training registry stores export mode metadata")
+else:
+    bad(f"training registry missing export mode metadata: {registry_after}")
+
+if registry_after["models"] and registry_after["models"][0].get("estimated_tokens") == 2400:
+    ok("training registry stores dataset token estimate")
+else:
+    bad(f"training registry missing token estimate: {registry_after}")
+
+
+# ══════════════════════════════════════════════════════════
 print("\nyaml-safe frontmatter")
 print("")
 # ══════════════════════════════════════════════════════════

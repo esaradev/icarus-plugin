@@ -74,7 +74,7 @@ Plugins (1):
 | Tool | What it does |
 |------|-------------|
 | `fabric_export` | Export training pairs. Modes: high-precision, normal, high-volume |
-| `fabric_train` | Start a Together AI fine-tune from your fabric data |
+| `fabric_train` | Start a Together AI fine-tune from your fabric data, auto-selecting the highest-quality mode with enough pairs |
 | `fabric_train_status` | Check job progress, updates model registry on completion |
 
 ### Replacement models
@@ -174,8 +174,8 @@ Entries carry a `training_value` field: `high`, `normal`, or `low`.
 - **low** -- generic session summaries, conversational exchanges
 
 Export modes:
-- `high-precision` -- only high-value + completed + linked reviews
-- `normal` -- excludes low-value (default)
+- `high-precision` -- only grounded entries: high-value, verified, linked reviews, structured sessions, or completed entries with evidence
+- `normal` -- excludes low-value and skips noisy unstructured session notes unless they are grounded
 - `high-volume` -- everything
 
 ## Smoke test
