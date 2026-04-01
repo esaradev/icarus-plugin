@@ -132,10 +132,7 @@ def write_fixture(agent, etype, body, summary, **extra):
     return str(path), entry_id
 
 def parse_id(path):
-    for line in Path(path).read_text("utf-8").splitlines():
-        if line.startswith("id: "):
-            return line.split(": ", 1)[1].strip()
-    return ""
+    return state._parse_head(Path(path)).get("id", "")
 
 
 # ══════════════════════════════════════════════════════════
@@ -307,7 +304,7 @@ if after_good > after_short_resp:
         ok("captured decision includes Task and Result context")
     else:
         bad("captured decision missing Task/Result structure")
-    if "training_value: high" in content:
+    if 'training_value: "high"' in content:
         ok("captured decision tagged training_value: high")
     else:
         bad("captured decision missing training_value: high")
@@ -681,17 +678,17 @@ assert r.get("status") == "written", f"evidence write failed: {r}"
 
 # read the entry and verify fields are on disk
 content = Path(r["path"]).read_text("utf-8")
-if "verified: true" in content:
+if 'verified: "true"' in content:
     ok("verified field written to entry")
 else:
     bad("verified field missing from entry")
 
-if "evidence: 12/12 tests pass" in content:
+if 'evidence: "12/12 tests pass, load test 1000 rps stable"' in content:
     ok("evidence field written to entry")
 else:
     bad("evidence field missing from entry")
 
-if "source_tool: bash" in content:
+if 'source_tool: "bash"' in content:
     ok("source_tool field written to entry")
 else:
     bad("source_tool field missing from entry")
@@ -729,6 +726,35 @@ if any("architecture" in str(e.get("summary", "")).lower() for e in excluded_ent
     ok("low-value unverified session excluded from high-precision")
 else:
     bad("low-value session not excluded from high-precision")
+
+
+# ══════════════════════════════════════════════════════════
+print("\nyaml-safe frontmatter")
+print("")
+# ══════════════════════════════════════════════════════════
+
+clean_fabric()
+reset_agent("alice")
+
+special_summaries = [
+    "[auth, billing]",
+    "true",
+    "2026-03-31",
+    "foo # bar",
+    "a: b",
+]
+for summary in special_summaries:
+    result = json.loads(tools.fabric_write({
+        "type": "task",
+        "content": "body",
+        "summary": summary,
+    }))
+    assert result.get("status") == "written", f"yaml-safe write failed: {result}"
+    parsed = exp.parse_entry(Path(result["path"]))
+    if parsed and parsed.get("summary") == summary:
+        ok(f"yaml-safe summary round-trips: {summary}")
+    else:
+        bad(f"yaml-safe summary broke: in={summary!r} out={parsed.get('summary') if parsed else None!r}")
 
 
 # ══════════════════════════════════════════════════════════

@@ -278,6 +278,28 @@ def save_creative(s):
 
 # ── Fabric I/O ───────────────────────────────────────────
 
+def _yaml_scalar(value):
+    """Encode a scalar as a YAML-safe quoted string."""
+    return json.dumps(str(value))
+
+
+def _parse_frontmatter_scalar(text, key):
+    """Read a scalar frontmatter value and normalize quoted YAML strings."""
+    m = re.search(rf"^{key}: (.+)$", text, re.MULTILINE)
+    if not m:
+        return ""
+    raw = m.group(1).strip()
+    try:
+        import yaml as _yaml
+        value = _yaml.safe_load(raw)
+    except Exception:
+        value = raw
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value)
+    return str(value)
+
 def write_entry(entry_type, content, summary, tier="hot", tags="", platform="cli",
                 status="", outcome="", review_of="", revises="", customer_id="",
                 assigned_to="", training_value="", verified="", evidence="",
@@ -304,38 +326,38 @@ def write_entry(entry_type, content, summary, tier="hot", tags="", platform="cli
 
     lines = [
         "---",
-        f"id: {secrets.token_hex(4)}",
-        f"agent: {agent}",
-        f"platform: {platform}",
-        f"timestamp: {ts_iso}",
-        f"type: {entry_type}",
-        f"tier: {tier}",
-        f"summary: {summary}",
-        f"project_id: {project_id}",
-        f"session_id: {sid}",
+        f"id: {_yaml_scalar(secrets.token_hex(4))}",
+        f"agent: {_yaml_scalar(agent)}",
+        f"platform: {_yaml_scalar(platform)}",
+        f"timestamp: {_yaml_scalar(ts_iso)}",
+        f"type: {_yaml_scalar(entry_type)}",
+        f"tier: {_yaml_scalar(tier)}",
+        f"summary: {_yaml_scalar(summary)}",
+        f"project_id: {_yaml_scalar(project_id)}",
+        f"session_id: {_yaml_scalar(sid)}",
     ]
     if tags:
         lines.append(f"tags: [{tags}]")
     if status:
-        lines.append(f"status: {status}")
+        lines.append(f"status: {_yaml_scalar(status)}")
     if outcome:
-        lines.append(f"outcome: {outcome}")
+        lines.append(f"outcome: {_yaml_scalar(outcome)}")
     if review_of:
-        lines.append(f"review_of: {review_of}")
+        lines.append(f"review_of: {_yaml_scalar(review_of)}")
     if revises:
-        lines.append(f"revises: {revises}")
+        lines.append(f"revises: {_yaml_scalar(revises)}")
     if customer_id:
-        lines.append(f"customer_id: {customer_id}")
+        lines.append(f"customer_id: {_yaml_scalar(customer_id)}")
     if assigned_to:
-        lines.append(f"assigned_to: {assigned_to}")
+        lines.append(f"assigned_to: {_yaml_scalar(assigned_to)}")
     if training_value:
-        lines.append(f"training_value: {training_value}")
+        lines.append(f"training_value: {_yaml_scalar(training_value)}")
     if verified:
-        lines.append(f"verified: {verified}")
+        lines.append(f"verified: {_yaml_scalar(verified)}")
     if evidence:
-        lines.append(f"evidence: {evidence}")
+        lines.append(f"evidence: {_yaml_scalar(evidence)}")
     if source_tool:
-        lines.append(f"source_tool: {source_tool}")
+        lines.append(f"source_tool: {_yaml_scalar(source_tool)}")
     if artifact_paths:
         lines.append(f"artifact_paths: [{artifact_paths}]")
     lines.extend(["---", "", content])
@@ -362,24 +384,16 @@ def read_recent(agent="", limit=5):
         return []
     out = []
     for f in sorted(FABRIC_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True):
-        head = f.read_text("utf-8")[:600]
-        if "tier: hot" not in head:
+        head = _parse_head(f)
+        if head.get("tier") != "hot":
             continue
-        if agent and f"agent: {agent}" not in head:
+        if agent and head.get("agent") != agent:
             continue
-        summary = ""
-        m = re.search(r"^summary: (.+)$", head, re.MULTILINE)
-        if m:
-            summary = m.group(1)
-        entry_agent = ""
-        m = re.search(r"^agent: (.+)$", head, re.MULTILINE)
-        if m:
-            entry_agent = m.group(1)
-        ts = ""
-        m = re.search(r"^timestamp: (.+)$", head, re.MULTILINE)
-        if m:
-            ts = m.group(1)
-        out.append({"agent": entry_agent, "timestamp": ts, "summary": summary})
+        out.append({
+            "agent": head.get("agent", ""),
+            "timestamp": head.get("timestamp", ""),
+            "summary": head.get("summary", ""),
+        })
         if len(out) >= limit:
             break
     return out
@@ -391,19 +405,13 @@ def read_cross_agent(limit=3):
         return []
     out = []
     for f in sorted(FABRIC_DIR.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True):
-        head = f.read_text("utf-8")[:600]
-        if AGENT_NAME and f"agent: {AGENT_NAME}" in head:
+        head = _parse_head(f)
+        if AGENT_NAME and head.get("agent") == AGENT_NAME:
             continue
-        if not any(t in head for t in ("type: review", "type: dialogue", "type: decision")):
+        if head.get("type") not in ("review", "dialogue", "decision"):
             continue
-        agent = ""
-        m = re.search(r"^agent: (.+)$", head, re.MULTILINE)
-        if m:
-            agent = m.group(1)
-        summary = ""
-        m = re.search(r"^summary: (.+)$", head, re.MULTILINE)
-        if m:
-            summary = m.group(1)
+        agent = head.get("agent", "")
+        summary = head.get("summary", "")
         if summary:
             out.append(f"{agent}: {summary}")
         if len(out) >= limit:
@@ -420,9 +428,9 @@ def _parse_head(filepath, max_bytes=800):
                 "project_id", "session_id",
                 "outcome", "training_value", "verified", "evidence",
                 "source_tool", "artifact_paths"):
-        m = re.search(rf"^{key}: (.+)$", text, re.MULTILINE)
-        if m:
-            fields[key] = m.group(1)
+        value = _parse_frontmatter_scalar(text, key)
+        if value != "":
+            fields[key] = value
     fields["file"] = filepath.name
     return fields
 
@@ -526,14 +534,9 @@ def search_entries(query, limit=10):
             text = f.read_text("utf-8")
             if q not in text.lower():
                 continue
-            summary = ""
-            m = re.search(r"^summary: (.+)$", text[:500], re.MULTILINE)
-            if m:
-                summary = m.group(1)
-            agent = ""
-            m = re.search(r"^agent: (.+)$", text[:500], re.MULTILINE)
-            if m:
-                agent = m.group(1)
+            head = _parse_head(f)
+            summary = head.get("summary", "")
+            agent = head.get("agent", "")
             matches = [line.strip() for line in text.split("\n") if q in line.lower()][:3]
             results.append({"file": f.name, "agent": agent, "summary": summary, "matches": matches})
             if len(results) >= limit:
