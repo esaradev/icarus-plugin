@@ -226,7 +226,7 @@ wiki_lint                                           # health check
 
 Every ingest creates one source page (with hash + excerpt + provenance) and up to 4 entity/topic pages (extracted from headings and repeated capitalized phrases), then refreshes `index.md` and appends to `log.md`. Re-ingesting the same file updates existing pages rather than duplicating.
 
-Entity extraction is deterministic (no LLM call) in v1 — the structure is the value. Add your own synthesis inside the generated pages; re-ingest preserves it.
+**Entity/topic extraction (v1.1).** When `TOGETHER_API_KEY` is set, ingest calls Together's chat endpoint (default model `meta-llama/Llama-3.1-8B-Instruct-Turbo`, override via `WIKI_LLM_MODEL`) to pick candidates. If the key is missing, the call fails, or the response is malformed, ingest silently falls back to the v1 deterministic heuristic (headings + repeated capitalized phrases). Force the heuristic with `WIKI_LLM_EXTRACTION=0`. Every ingest response — and every source page's frontmatter — records which path ran via `extraction_mode` (`llm`, `heuristic`, `heuristic-no-key`, or `heuristic-fallback`).
 
 Browse the wiki in the Hermes Dashboard `Icarus` view, or open `$FABRIC_DIR` in Obsidian — the wikilinks light up the graph immediately.
 

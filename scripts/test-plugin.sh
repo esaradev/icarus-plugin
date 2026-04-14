@@ -1186,6 +1186,72 @@ else:
     bad(f"wiki: query returned no hits: {r}")
 
 
+# ── wiki LLM extraction (v1.1) ────────────────────────────
+def _fresh_wiki_root(name):
+    root = fabric_dir / name
+    if root.exists():
+        import shutil; shutil.rmtree(root)
+    root.mkdir(parents=True, exist_ok=True)
+    state.FABRIC_DIR = root
+    inbox = root / "raw" / "inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+    p = inbox / "llm-fixture.md"
+    p.write_text(
+        "# Fixture\n\n## Section\n\nSomeName SomeName SomeName.\n",
+        "utf-8",
+    )
+    json.loads(tools.wiki_init({}))
+    return root, p
+
+# explicit opt-out via env
+os.environ["WIKI_LLM_EXTRACTION"] = "0"
+root, src = _fresh_wiki_root("_llm_env_off")
+r = json.loads(tools.wiki_ingest({"source_path": str(src)}))
+if r.get("extraction_mode") == "heuristic":
+    ok("wiki: WIKI_LLM_EXTRACTION=0 forces heuristic")
+else:
+    bad(f"wiki: env opt-out did not force heuristic: {r}")
+del os.environ["WIKI_LLM_EXTRACTION"]
+
+# no API key path
+os.environ.pop("TOGETHER_API_KEY", None)
+_orig_key_fn = wiki._together_key_for_wiki
+wiki._together_key_for_wiki = lambda: ""
+root, src = _fresh_wiki_root("_llm_no_key")
+r = json.loads(tools.wiki_ingest({"source_path": str(src)}))
+if r.get("extraction_mode") == "heuristic-no-key":
+    ok("wiki: missing TOGETHER_API_KEY falls back to heuristic-no-key")
+else:
+    bad(f"wiki: no-key fallback wrong: {r}")
+
+# monkey-patch LLM success
+wiki._together_key_for_wiki = lambda: "stub-key"
+_orig_llm = wiki._extract_candidates_llm
+wiki._extract_candidates_llm = lambda text, max_pages=5: [
+    {"kind": "entity", "title": "Mocked Entity", "slug": "mocked-entity", "evidence": "mock"},
+    {"kind": "topic", "title": "Mocked Topic", "slug": "mocked-topic", "evidence": "mock"},
+]
+root, src = _fresh_wiki_root("_llm_ok")
+r = json.loads(tools.wiki_ingest({"source_path": str(src)}))
+if r.get("extraction_mode") == "llm" and any("mocked-entity" in p for p in r.get("pages_created", [])):
+    ok("wiki: LLM path writes mocked candidates and reports mode=llm")
+else:
+    bad(f"wiki: LLM success path wrong: {r}")
+
+# LLM raises -> fallback
+wiki._extract_candidates_llm = lambda text, max_pages=5: (_ for _ in ()).throw(ValueError("bad json"))
+root, src = _fresh_wiki_root("_llm_bad")
+r = json.loads(tools.wiki_ingest({"source_path": str(src)}))
+if r.get("extraction_mode") == "heuristic-fallback" and r.get("pages_created"):
+    ok("wiki: LLM failure falls back to heuristic and still writes pages")
+else:
+    bad(f"wiki: LLM failure fallback wrong: {r}")
+
+# restore originals
+wiki._extract_candidates_llm = _orig_llm
+wiki._together_key_for_wiki = _orig_key_fn
+
+
 # ══════════════════════════════════════════════════════════
 print(f"\n{'─' * 40}")
 print(f"  {PASS} passed, {FAIL} failed")
