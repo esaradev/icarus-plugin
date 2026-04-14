@@ -206,6 +206,30 @@ FABRIC_DIR=~/my-vault/icarus-notes
 OBSIDIAN_VAULT_PATH=~/my-vault
 ```
 
+## Wiki (v1) — persistent knowledge layer
+
+Fabric is a chronological log. The wiki is a compounding, interlinked knowledge base the agent maintains as new sources arrive. Inspired by Andrej Karpathy's LLM Wiki pattern.
+
+**Three layers under `$FABRIC_DIR`:**
+- `raw/inbox/` — drop zone for source files (immutable)
+- `wiki/` — agent-owned pages: `entities/`, `topics/`, `sources/`, `indexes/`, `notes/`, plus `Home.md`, `index.md`, `log.md`, `_schema.json`
+- Sources are immutable, wiki is LLM-owned, existing fabric entries stay untouched
+
+**Flow:**
+```
+wiki_init                                           # idempotent scaffold
+# drop a file into ~/fabric/raw/inbox/
+wiki_ingest(source_path="~/fabric/raw/inbox/paper.md")
+wiki_query(question="...")
+wiki_lint                                           # health check
+```
+
+Every ingest creates one source page (with hash + excerpt + provenance) and up to 4 entity/topic pages (extracted from headings and repeated capitalized phrases), then refreshes `index.md` and appends to `log.md`. Re-ingesting the same file updates existing pages rather than duplicating.
+
+Entity extraction is deterministic (no LLM call) in v1 — the structure is the value. Add your own synthesis inside the generated pages; re-ingest preserves it.
+
+Browse the wiki in the Hermes Dashboard `Icarus` view, or open `$FABRIC_DIR` in Obsidian — the wikilinks light up the graph immediately.
+
 ## Builder -> reviewer -> fix
 
 ```

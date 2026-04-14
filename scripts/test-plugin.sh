@@ -1074,6 +1074,92 @@ else:
 
 
 # ══════════════════════════════════════════════════════════
+# Wiki: persistent knowledge layer (v1)
+# ══════════════════════════════════════════════════════════
+print("\n── wiki ──")
+
+wiki_spec = importlib.util.spec_from_file_location(
+    "hermes_plugins.icarus.wiki", str(repo_dir / "wiki.py"))
+wiki = importlib.util.module_from_spec(wiki_spec)
+sys.modules["hermes_plugins.icarus.wiki"] = wiki
+wiki_spec.loader.exec_module(wiki)
+
+# fresh root for wiki tests (isolate from fabric fixtures)
+wiki_root = fabric_dir / "_wiki_test"
+wiki_root.mkdir(parents=True, exist_ok=True)
+state.FABRIC_DIR = wiki_root  # point tools at isolated root
+
+r = json.loads(tools.wiki_init({}))
+if r.get("status") in ("initialized", "already_initialized") and (wiki_root / "wiki" / "index.md").exists():
+    ok("wiki: init creates scaffold")
+else:
+    bad(f"wiki: init failed: {r}")
+
+for sub in ("entities", "topics", "sources", "indexes", "notes"):
+    if (wiki_root / "wiki" / sub).is_dir():
+        ok(f"wiki: {sub}/ directory created")
+    else:
+        bad(f"wiki: {sub}/ missing")
+
+# drop a fixture source
+inbox = wiki_root / "raw" / "inbox"
+src_path = inbox / "sample-source.md"
+src_path.write_text(
+    "# Karpathy LLM Wiki\n\n"
+    "Andrej Karpathy dropped a pattern called LLM Wiki.\n\n"
+    "## The idea\n\nAndrej Karpathy calls this a compounding artifact.\n\n"
+    "## Layers\n\nRaw, Wiki, Schema.\n\n"
+    "Obsidian Obsidian Obsidian graph view.\n",
+    "utf-8",
+)
+
+r = json.loads(tools.wiki_ingest({"source_path": str(src_path)}))
+if r.get("status") == "ingested" and len(r.get("pages_created", [])) >= 3:
+    ok("wiki: ingest created source + entity/topic pages")
+else:
+    bad(f"wiki: ingest failed: {r}")
+
+index_text = (wiki_root / "wiki" / "index.md").read_text("utf-8")
+if "[[sources/sample-source]]" in index_text and "## Topics" in index_text:
+    ok("wiki: index.md refreshed with source + topics")
+else:
+    bad("wiki: index.md missing expected entries")
+
+log_text = (wiki_root / "wiki" / "log.md").read_text("utf-8")
+if "ingested `sample-source.md`" in log_text:
+    ok("wiki: log.md appended")
+else:
+    bad("wiki: log.md missing ingest line")
+
+src_page = (wiki_root / "wiki" / "sources" / "sample-source.md").read_text("utf-8")
+if "sources:" in src_page and "[[" in src_page and "Original path" in src_page:
+    ok("wiki: source page has frontmatter + provenance + see-also")
+else:
+    bad("wiki: source page malformed")
+
+r = json.loads(tools.wiki_lint({}))
+if r.get("status") == "ok" and not r.get("broken_links"):
+    ok("wiki: lint reports no broken links on clean ingest")
+else:
+    bad(f"wiki: lint reported issues: {r}")
+
+# security: reject source outside raw/
+outside = fabric_dir / "outside.md"
+outside.write_text("nope", "utf-8")
+r = json.loads(tools.wiki_ingest({"source_path": str(outside)}))
+if "error" in r and "raw" in r["error"]:
+    ok("wiki: rejects source outside raw/")
+else:
+    bad(f"wiki: should have rejected outside source, got {r}")
+
+r = json.loads(tools.wiki_query({"question": "Karpathy"}))
+if r.get("count", 0) > 0:
+    ok("wiki: query finds hits across wiki")
+else:
+    bad(f"wiki: query returned no hits: {r}")
+
+
+# ══════════════════════════════════════════════════════════
 print(f"\n{'─' * 40}")
 print(f"  {PASS} passed, {FAIL} failed")
 if FAIL > 0:
