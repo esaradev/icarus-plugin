@@ -1119,8 +1119,11 @@ if r.get("status") == "ingested" and len(r.get("pages_created", [])) >= 3:
 else:
     bad(f"wiki: ingest failed: {r}")
 
+source_page_path = Path(r.get("source_page", ""))
+source_link = f"[[{source_page_path.relative_to(wiki_root / 'wiki').with_suffix('').as_posix()}]]" if source_page_path.exists() else ""
+
 index_text = (wiki_root / "wiki" / "index.md").read_text("utf-8")
-if "[[sources/sample-source]]" in index_text and "## Topics" in index_text:
+if source_link and source_link in index_text and "## Topics" in index_text:
     ok("wiki: index.md refreshed with source + topics")
 else:
     bad("wiki: index.md missing expected entries")
@@ -1131,11 +1134,35 @@ if "ingested `sample-source.md`" in log_text:
 else:
     bad("wiki: log.md missing ingest line")
 
-src_page = (wiki_root / "wiki" / "sources" / "sample-source.md").read_text("utf-8")
+src_page = source_page_path.read_text("utf-8") if source_page_path.exists() else ""
 if "sources:" in src_page and "[[" in src_page and "Original path" in src_page:
     ok("wiki: source page has frontmatter + provenance + see-also")
 else:
     bad("wiki: source page malformed")
+
+before_repeat = src_page.count("Original path")
+r = json.loads(tools.wiki_ingest({"source_path": str(src_path)}))
+src_page_reingested = source_page_path.read_text("utf-8") if source_page_path.exists() else ""
+if r.get("status") == "ingested" and src_page_reingested.count("Original path") == before_repeat:
+    ok("wiki: re-ingest refreshes generated source block without duplicating it")
+else:
+    bad("wiki: re-ingest duplicated generated source content")
+
+alt_dir = wiki_root / "raw" / "articles"
+alt_dir.mkdir(parents=True, exist_ok=True)
+alt_src = alt_dir / "sample-source.md"
+alt_src.write_text(
+    "# Another Sample Source\n\n"
+    "Sample Source from a different folder should not collide.\n\n"
+    "## Distinct Topic\n\nPath-based identity matters.\n",
+    "utf-8",
+)
+r = json.loads(tools.wiki_ingest({"source_path": str(alt_src)}))
+source_pages = {p.stem for p in (wiki_root / "wiki" / "sources").glob("*.md")}
+if r.get("status") == "ingested" and {"inbox-sample-source", "articles-sample-source"}.issubset(source_pages):
+    ok("wiki: same basename in different raw folders gets distinct source pages")
+else:
+    bad(f"wiki: basename collision not handled: {r}")
 
 r = json.loads(tools.wiki_lint({}))
 if r.get("status") == "ok" and not r.get("broken_links"):
