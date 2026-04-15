@@ -228,7 +228,7 @@ Every ingest creates one source page (with hash + excerpt + provenance) and up t
 
 **Entity/topic extraction (v1.1).** When `TOGETHER_API_KEY` is set, ingest calls Together's chat endpoint (default model `meta-llama/Llama-3.1-8B-Instruct-Turbo`, override via `WIKI_LLM_MODEL`) to pick candidates. If the key is missing, the call fails, or the response is malformed, ingest silently falls back to the v1 deterministic heuristic (headings + repeated capitalized phrases). Force the heuristic with `WIKI_LLM_EXTRACTION=0`. Every ingest response — and every source page's frontmatter — records which path ran via `extraction_mode` (`llm`, `heuristic`, `heuristic-no-key`, or `heuristic-fallback`).
 
-Browse the wiki in the Hermes Dashboard `Icarus` view, or open `$FABRIC_DIR` in Obsidian — the wikilinks light up the graph immediately.
+Browse the wiki in the Hermes dashboard `Icarus` view (available in the `esaradev/hermes-agent` fork — run `hermes dashboard`), or open `$FABRIC_DIR` in Obsidian — the wikilinks light up the graph immediately.
 
 ## Builder -> reviewer -> fix
 
