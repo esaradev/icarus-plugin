@@ -23,6 +23,16 @@
 >
 > *Remember your work. Train your replacement.*
 
+## Install in one command
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/esaradev/icarus-plugin/feat/wiki-v1.1/install.sh | sh
+```
+
+That clones the plugin into `~/.hermes/plugins/icarus/`, scaffolds the wiki at `~/fabric/wiki/`, and prints next steps.
+
+Optional: `export OPENROUTER_API_KEY=sk-or-...` before first use for LLM-driven entity extraction. Without it, extraction falls back to a deterministic heuristic.
+
 ## What this is
 
 Icarus is a **Hermes plugin**. It runs inside Hermes and gives agents shared memory, training data extraction, and a model replacement pipeline.
