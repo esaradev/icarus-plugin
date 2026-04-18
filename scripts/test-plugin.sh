@@ -25,12 +25,14 @@ export FABRIC_DIR HOME_DIR REPO_DIR
 
 python3 - <<'PYTEST'
 import json
+import io
 import os
 import re
 import shutil
 import sys
 import types
 import importlib.util
+import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1184,6 +1186,114 @@ if r.get("count", 0) > 0:
     ok("wiki: query finds hits across wiki")
 else:
     bad(f"wiki: query returned no hits: {r}")
+
+
+# ── wiki LLM extraction (v1.1) ────────────────────────────
+def _fresh_wiki_root(name):
+    root = fabric_dir / name
+    if root.exists():
+        import shutil; shutil.rmtree(root)
+    root.mkdir(parents=True, exist_ok=True)
+    state.FABRIC_DIR = root
+    inbox = root / "raw" / "inbox"
+    inbox.mkdir(parents=True, exist_ok=True)
+    p = inbox / "llm-fixture.md"
+    p.write_text(
+        "# Fixture\n\n## Section\n\nSomeName SomeName SomeName.\n",
+        "utf-8",
+    )
+    json.loads(tools.wiki_init({}))
+    return root, p
+
+# explicit opt-out via env
+os.environ["WIKI_LLM_EXTRACTION"] = "0"
+root, src = _fresh_wiki_root("_llm_env_off")
+r = json.loads(tools.wiki_ingest({"source_path": str(src)}))
+if r.get("extraction_mode") == "heuristic":
+    ok("wiki: WIKI_LLM_EXTRACTION=0 forces heuristic")
+else:
+    bad(f"wiki: env opt-out did not force heuristic: {r}")
+del os.environ["WIKI_LLM_EXTRACTION"]
+
+# no API key path
+os.environ.pop("TOGETHER_API_KEY", None)
+_orig_key_fn = wiki._together_key_for_wiki
+wiki._together_key_for_wiki = lambda: ""
+root, src = _fresh_wiki_root("_llm_no_key")
+r = json.loads(tools.wiki_ingest({"source_path": str(src)}))
+if r.get("extraction_mode") == "heuristic-no-key" and "not set" in r.get("extraction_reason", ""):
+    ok("wiki: missing TOGETHER_API_KEY falls back to heuristic-no-key")
+else:
+    bad(f"wiki: no-key fallback wrong: {r}")
+
+# monkey-patch LLM success
+wiki._together_key_for_wiki = lambda: "stub-key"
+_orig_llm = wiki._extract_candidates_llm
+wiki._extract_candidates_llm = lambda text, max_pages=5: [
+    {"kind": "entity", "title": "Mocked Entity", "slug": "mocked-entity", "evidence": "mock"},
+    {"kind": "topic", "title": "Mocked Topic", "slug": "mocked-topic", "evidence": "mock"},
+]
+root, src = _fresh_wiki_root("_llm_ok")
+r = json.loads(tools.wiki_ingest({"source_path": str(src)}))
+if (
+    r.get("extraction_mode") == "llm"
+    and "succeeded" in r.get("extraction_reason", "")
+    and any("mocked-entity" in p for p in r.get("pages_created", []))
+):
+    ok("wiki: LLM path writes mocked candidates and reports mode=llm")
+else:
+    bad(f"wiki: LLM success path wrong: {r}")
+
+# LLM raises -> fallback
+wiki._extract_candidates_llm = lambda text, max_pages=5: (_ for _ in ()).throw(ValueError("bad json"))
+root, src = _fresh_wiki_root("_llm_bad")
+r = json.loads(tools.wiki_ingest({"source_path": str(src)}))
+if (
+    r.get("extraction_mode") == "heuristic-fallback"
+    and "bad json" in r.get("extraction_reason", "")
+    and r.get("pages_created")
+):
+    ok("wiki: LLM failure falls back to heuristic and still writes pages")
+else:
+    bad(f"wiki: LLM failure fallback wrong: {r}")
+
+# standalone/manual import should still read env key
+os.environ["TOGETHER_API_KEY"] = "tok-standalone"
+wiki._together_key_for_wiki = _orig_key_fn
+if wiki._together_key_for_wiki() == "tok-standalone":
+    ok("wiki: standalone key lookup reads TOGETHER_API_KEY from env")
+else:
+    bad("wiki: standalone key lookup missed TOGETHER_API_KEY")
+
+# status tool reports endpoint errors with reason
+_orig_status_llm = wiki.urllib.request.urlopen
+class _FakeResp:
+    status = 200
+    def __enter__(self): return self
+    def __exit__(self, exc_type, exc, tb): return False
+    def read(self): return b'{"id":"ok-123","choices":[{"message":{"content":"{\\"ok\\": true}"}}]}'
+wiki.urllib.request.urlopen = lambda req, timeout=30: _FakeResp()
+r = json.loads(tools.wiki_llm_status({}))
+if r.get("status") == "ok" and r.get("response_id") == "ok-123":
+    ok("wiki: llm status reports live success")
+else:
+    bad(f"wiki: llm status success path wrong: {r}")
+
+def _raise_http(req, timeout=30):
+    raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", hdrs=None, fp=io.BytesIO(b"error code: 1010"))
+wiki.urllib.request.urlopen = _raise_http
+r = json.loads(tools.wiki_llm_status({}))
+if r.get("status") == "error" and "http-403" in r.get("reason", "") and "1010" in r.get("reason", ""):
+    ok("wiki: llm status reports HTTP error details")
+else:
+    bad(f"wiki: llm status error path wrong: {r}")
+
+wiki.urllib.request.urlopen = _orig_status_llm
+
+# restore originals
+wiki._extract_candidates_llm = _orig_llm
+wiki._together_key_for_wiki = _orig_key_fn
+os.environ.pop("TOGETHER_API_KEY", None)
 
 
 # ══════════════════════════════════════════════════════════

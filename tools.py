@@ -274,3 +274,57 @@ def wiki_lint(args: dict, **kwargs) -> str:
         return _json(wiki.lint(state.FABRIC_DIR))
     except Exception as e:
         return _json({"error": str(e)})
+
+
+def wiki_ask(args: dict, **kwargs) -> str:
+    question = args.get("question", "").strip()
+    if not question:
+        return _json({"error": "question is required"})
+    try:
+        from . import wiki
+        return _json(wiki.ask(question, state.FABRIC_DIR, max_pages=args.get("max_pages", 6)))
+    except Exception as e:
+        return _json({"error": str(e)})
+
+
+def wiki_llm_status(args: dict, **kwargs) -> str:
+    try:
+        from . import wiki
+        return _json(wiki.llm_status(live=bool(args.get("live", True))))
+    except Exception as e:
+        return _json({"error": str(e)})
+
+
+def fabric_maintain(args: dict, **kwargs) -> str:
+    mode = args.get("mode", "report").strip()
+    try:
+        from . import maintain
+        if mode == "report":
+            return _json(maintain.maintenance_report())
+        elif mode == "stale":
+            threshold = float(args.get("quality_threshold", 0.2))
+            min_age = int(args.get("min_age_days", 30))
+            return _json({"stale": maintain.find_stale(quality_threshold=threshold, min_age_days=min_age)})
+        elif mode == "dedup":
+            return _json({"duplicates": maintain.find_duplicates()})
+        elif mode == "archive":
+            entry_id = args.get("entry_id", "").strip()
+            if not entry_id:
+                return _json({"error": "entry_id is required for archive mode"})
+            return _json(maintain.archive_entry(entry_id))
+        elif mode == "score":
+            entry_id = args.get("entry_id", "").strip()
+            if not entry_id:
+                return _json({"error": "entry_id is required for score mode"})
+            for f in state.FABRIC_DIR.glob("*.md"):
+                head = f.read_text("utf-8", errors="replace")[:400]
+                import re
+                m = re.search(r'^id: "?([^"\n]+)"?', head, re.MULTILINE)
+                if m and m.group(1).strip() == entry_id:
+                    entry = maintain._parse_entry(f)
+                    return _json(maintain.score_entry(entry))
+            return _json({"error": f"entry {entry_id} not found"})
+        else:
+            return _json({"error": f"unknown mode: {mode}. use report/stale/dedup/archive/score"})
+    except Exception as e:
+        return _json({"error": str(e)})
