@@ -10,13 +10,16 @@ Usage:
 """
 
 import argparse
+import hashlib
 import os
 import re
+import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 FABRIC_DIR = Path(os.environ.get("FABRIC_DIR", Path.home() / "fabric"))
+INDEX_NAME = ".icarus-index.sqlite3"
 
 
 def _strip_generated_obsidian_sections(body: str) -> str:
@@ -276,19 +279,143 @@ def deduplicate(entries):
     return result
 
 
+def _entry_paths():
+    for d in [FABRIC_DIR, FABRIC_DIR / "cold"]:
+        if not d.exists():
+            continue
+        yield from d.glob("*.md")
+
+
+def _index_path() -> Path:
+    return FABRIC_DIR / INDEX_NAME
+
+
+def _connect_index():
+    FABRIC_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(_index_path())
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS entries ("
+        "path TEXT PRIMARY KEY, mtime REAL NOT NULL, size INTEGER NOT NULL, "
+        "agent TEXT, project_id TEXT, entry_type TEXT, summary TEXT, body TEXT)"
+    )
+    conn.execute(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts "
+        "USING fts5(path UNINDEXED, summary, body, tags, content='')"
+    )
+    return conn
+
+
+def _fingerprint(path: Path) -> tuple[float, int]:
+    stat = path.stat()
+    return stat.st_mtime, stat.st_size
+
+
+def _fts_tags(entry) -> str:
+    tags = entry.get("tags", []) or []
+    if isinstance(tags, str):
+        tags = [tags]
+    return " ".join(str(tag) for tag in tags)
+
+
+def refresh_index(force=False):
+    """Refresh the SQLite FTS index and return an update summary."""
+    if not FABRIC_DIR.exists():
+        return {"indexed": 0, "deleted": 0, "path": str(_index_path())}
+    conn = _connect_index()
+    indexed = 0
+    seen = set()
+    try:
+        for path in _entry_paths():
+            rel = str(path.relative_to(FABRIC_DIR))
+            seen.add(rel)
+            mtime, size = _fingerprint(path)
+            row = conn.execute("SELECT mtime, size FROM entries WHERE path=?", (rel,)).fetchone()
+            if row and not force and row[0] == mtime and row[1] == size:
+                continue
+            entry = parse_entry(path)
+            if not entry:
+                continue
+            conn.execute("DELETE FROM entries WHERE path=?", (rel,))
+            conn.execute("DELETE FROM entries_fts WHERE path=?", (rel,))
+            conn.execute(
+                "INSERT INTO entries(path, mtime, size, agent, project_id, entry_type, summary, body) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    rel,
+                    mtime,
+                    size,
+                    entry.get("agent", ""),
+                    entry.get("project_id", entry.get("project", "")),
+                    entry.get("type", ""),
+                    entry.get("summary", ""),
+                    entry.get("_body", ""),
+                ),
+            )
+            conn.execute(
+                "INSERT INTO entries_fts(path, summary, body, tags) VALUES (?, ?, ?, ?)",
+                (rel, entry.get("summary", ""), entry.get("_body", ""), _fts_tags(entry)),
+            )
+            indexed += 1
+        deleted = 0
+        for (rel,) in conn.execute("SELECT path FROM entries").fetchall():
+            if rel not in seen:
+                conn.execute("DELETE FROM entries WHERE path=?", (rel,))
+                conn.execute("DELETE FROM entries_fts WHERE path=?", (rel,))
+                deleted += 1
+        conn.commit()
+        return {"indexed": indexed, "deleted": deleted, "path": str(_index_path())}
+    finally:
+        conn.close()
+
+
+def _fts_query(query: str) -> str:
+    terms = re.findall(r"[a-z0-9_/-]+", query.lower())
+    terms = [term.replace('"', '') for term in terms if term not in STOP_WORDS]
+    return " OR ".join(f'"{term}"' for term in terms[:12])
+
+
+def _candidate_paths_from_index(query: str, limit: int = 250) -> list[Path]:
+    refresh_index()
+    expr = _fts_query(query)
+    if not expr:
+        return list(_entry_paths())
+    conn = _connect_index()
+    try:
+        rows = conn.execute(
+            "SELECT path FROM entries_fts WHERE entries_fts MATCH ? "
+            "ORDER BY bm25(entries_fts) LIMIT ?",
+            (expr, limit),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    finally:
+        conn.close()
+    paths = [FABRIC_DIR / rel for (rel,) in rows]
+    return [path for path in paths if path.exists()]
+
+
+def load_entries(query: str):
+    paths = _candidate_paths_from_index(query)
+    if not paths:
+        paths = list(_entry_paths())
+    entries = []
+    for path in paths:
+        e = parse_entry(path)
+        if e:
+            entries.append(e)
+    return entries
+
+
 def retrieve(query, max_results=5, max_tokens=2000, agent=None, project=None):
     if not FABRIC_DIR.exists():
         return []
 
-    # Scan all entries
-    entries = []
-    for d in [FABRIC_DIR, FABRIC_DIR / "cold"]:
-        if not d.exists():
-            continue
-        for f in d.glob("*.md"):
-            e = parse_entry(f)
-            if e:
-                entries.append(e)
+    # Use a persistent SQLite FTS index to avoid scanning the whole corpus on
+    # every recall. If the index is unavailable, load_entries falls back to the
+    # previous full-directory scan behavior.
+    entries = load_entries(query)
 
     if not entries:
         return []
@@ -372,11 +499,16 @@ def main():
     parser.add_argument("--agent", default=None, help="Boost entries from this agent")
     parser.add_argument("--project", default=None, help="Boost entries from this project")
     parser.add_argument("--fabric-dir", default=None, help="Override fabric directory")
+    parser.add_argument("--reindex", action="store_true", help="Force-refresh the retrieval index and exit")
     args = parser.parse_args()
 
     global FABRIC_DIR
     if args.fabric_dir:
         FABRIC_DIR = Path(args.fabric_dir)
+
+    if args.reindex:
+        print(refresh_index(force=True))
+        sys.exit(0)
 
     results = retrieve(args.query, args.max_results, args.max_tokens, args.agent, args.project)
 
