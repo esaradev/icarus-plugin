@@ -29,6 +29,8 @@ py-modules = [
   "fabric_schema",
   "redaction",
   "storage",
+  "export_training",
+  "fabric_retrieve",
 ]
 
 [tool.ruff]
