@@ -32,7 +32,7 @@ jobs:
         run: ruff check .
 
       - name: Pytest
-        run: pytest -q
+        run: pytest -q --override-ini="pythonpath=" tests/
 
       - name: Smoke handoff script
         run: bash scripts/smoke-handoff.sh
