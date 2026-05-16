@@ -691,9 +691,6 @@ def _select_training_export_mode(min_pairs):
 def start_training(model=None, suffix=None, epochs=3, batch_size=None, learning_rate=None,
                    checkpoints=None, mode=None, min_pairs=10, upload_confirm=False):
     """Export, upload, and start a Together AI fine-tune."""
-    key = _together_key()
-    if not key:
-        return {"error": "TOGETHER_API_KEY not set in .env"}
 
     if mode:
         export = export_training(mode=mode)
@@ -709,6 +706,21 @@ def start_training(model=None, suffix=None, epochs=3, batch_size=None, learning_
             "mode": export_mode,
             "tried_modes": {k: v.get("pairs", 0) for k, v in tried_modes.items() if "error" not in v},
         }
+
+    if not upload_confirm:
+        safe = dict(export)
+        safe.pop("_training_data", None)
+        safe.pop("training_data_path", None)
+        return {
+            "status": "dry_run",
+            "message": "Training data exported and redacted, but not uploaded. "
+                       "Re-run with upload_confirm=true to start fine-tuning.",
+            **safe,
+        }
+
+    key = _together_key()
+    if not key:
+        return {"error": "TOGETHER_API_KEY not set in .env"}
 
     training_data = export.get("_training_data", "")
     if not training_data:
