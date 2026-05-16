@@ -16,6 +16,11 @@ import re
 import sys
 from pathlib import Path
 
+try:
+    from .redaction import has_do_not_train_tag, redact_pairs
+except ImportError:  # pragma: no cover
+    from redaction import has_do_not_train_tag, redact_pairs
+
 FABRIC_DIR = Path(os.environ.get("FABRIC_DIR", Path.home() / "fabric"))
 
 
@@ -112,6 +117,9 @@ def parse_entry(filepath):
                 meta[current_key] = []
     meta["body"] = _strip_generated_obsidian_sections(parts[2])
     meta["file"] = filepath.name
+    tags = meta.get("tags", [])
+    if isinstance(tags, str):
+        meta["tags"] = [item.strip() for item in tags.split(",") if item.strip()]
     return meta
 
 
@@ -244,7 +252,7 @@ def extract_pairs(entries):
             add_pair(user_msg, body, {**base_meta, "type": "dialogue"})
 
         elif entry_type == "decision":
-            user_msg = f"[decision] What did you decide?"
+            user_msg = "[decision] What did you decide?"
             add_pair(user_msg, body, {**base_meta, "type": "decision"})
 
         elif entry_type == "session":
@@ -260,11 +268,11 @@ def extract_pairs(entries):
                     )
             # generic session pairs are much noisier; only keep when grounded
             if verified or tv == "high" or has_evidence:
-                user_msg = f"[session] Summarize what was accomplished."
+                user_msg = "[session] Summarize what was accomplished."
                 add_pair(user_msg, body, {**base_meta, "type": "session"})
 
         elif entry_type == "review":
-            user_msg = f"[review] Review the following code or work."
+            user_msg = "[review] Review the following code or work."
             add_pair(user_msg, body, {**base_meta, "type": "review"})
 
         else:
@@ -283,7 +291,7 @@ def extract_pairs(entries):
                 if not orig:
                     continue
                 # Find revision: must explicitly ref back to the review or original
-                review_file = e.get("file", "")
+                e.get("file", "")
                 orig_file = orig.get("file", "")
                 ref_agent = ref.split(":")[0] if ":" in ref else ""
                 candidates = []
@@ -407,6 +415,12 @@ def main():
     parser.add_argument("--fabric-dir", default=None, help="Fabric directory (default: ~/fabric/)")
     parser.add_argument("--mode", choices=["high-precision", "normal", "high-volume"],
                         default="normal", help="Export quality mode")
+    parser.add_argument("--redact", dest="redact", action="store_true", default=True,
+                        help="Redact secrets, emails, customer IDs and file paths before writing outputs (default)")
+    parser.add_argument("--no-redact", dest="redact", action="store_false",
+                        help="Disable redaction. Use only for local inspection.")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print export statistics without writing JSONL files")
     args = parser.parse_args()
 
     global FABRIC_DIR
@@ -421,6 +435,10 @@ def main():
     if not all_entries:
         print("no fabric entries found")
         sys.exit(0)
+
+    before_do_not_train = len(all_entries)
+    all_entries = [e for e in all_entries if not has_do_not_train_tag(e)]
+    do_not_train_excluded = before_do_not_train - len(all_entries)
 
     # filter by mode
     excluded = 0
@@ -471,28 +489,39 @@ def main():
             weighted.append(p)
     pairs = weighted
 
+    redaction_report = {"enabled": args.redact, "pairs_redacted": 0, "replacements": {}}
+    if args.redact:
+        pairs, redaction_report = redact_pairs(pairs)
+        redaction_report["enabled"] = True
+
     # Write outputs
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
 
-    # OpenAI format
-    with open(out / "openai.jsonl", "w") as f:
-        for p in pairs:
-            f.write(json.dumps(to_openai(p)) + "\n")
+    if args.dry_run:
+        print(f"dry run only; no files written to {out}/")
+    else:
+        # OpenAI format
+        with open(out / "openai.jsonl", "w") as f:
+            for p in pairs:
+                f.write(json.dumps(to_openai(p)) + "\n")
 
-    # Together AI format (Llama instruct template)
-    with open(out / "together.jsonl", "w") as f:
-        for p in pairs:
-            f.write(json.dumps(to_together(p)) + "\n")
+        # Together AI format (Llama instruct template)
+        with open(out / "together.jsonl", "w") as f:
+            for p in pairs:
+                f.write(json.dumps(to_together(p)) + "\n")
 
-    # HuggingFace format
-    with open(out / "hf-dataset.jsonl", "w") as f:
-        for p in pairs:
-            f.write(json.dumps(to_hf(p)) + "\n")
+        # HuggingFace format
+        with open(out / "hf-dataset.jsonl", "w") as f:
+            for p in pairs:
+                f.write(json.dumps(to_hf(p)) + "\n")
 
-    # Raw pairs
-    with open(out / "raw-pairs.json", "w") as f:
-        json.dump(pairs, f, indent=2)
+        # Raw pairs
+        with open(out / "raw-pairs.json", "w") as f:
+            json.dump(pairs, f, indent=2)
+
+        with open(out / "redaction-report.json", "w") as f:
+            json.dump(redaction_report, f, indent=2, sort_keys=True)
 
     # Stats
     total_tokens = sum(estimate_tokens(p["input"] + p["output"]) for p in pairs)
@@ -507,14 +536,18 @@ def main():
     print(f"  cross-platform:    {xplat_count}")
     print(f"  estimated tokens:  {total_tokens:,}")
     print(f"  source entries:    {len(entries)} selected / {len(all_entries)} total ({excluded} excluded)")
-    print(f"  by type:")
+    print(f"  do-not-train:      {do_not_train_excluded} excluded")
+    print(f"  redaction:         {redaction_report.get('pairs_redacted', 0)} pairs redacted")
+    print("  by type:")
     for t, c in sorted(type_counts.items()):
         print(f"    {t}: {c}")
-    print(f"  files:")
-    print(f"    {out}/openai.jsonl")
-    print(f"    {out}/together.jsonl")
-    print(f"    {out}/hf-dataset.jsonl")
-    print(f"    {out}/raw-pairs.json")
+    if not args.dry_run:
+        print("  files:")
+        print(f"    {out}/openai.jsonl")
+        print(f"    {out}/together.jsonl")
+        print(f"    {out}/hf-dataset.jsonl")
+        print(f"    {out}/raw-pairs.json")
+        print(f"    {out}/redaction-report.json")
 
 
 if __name__ == "__main__":

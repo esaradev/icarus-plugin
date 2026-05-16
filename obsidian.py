@@ -13,9 +13,8 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +22,7 @@ LINKS_START = "<!-- ICARUS_OBSIDIAN_LINKS_START -->"
 LINKS_END = "<!-- ICARUS_OBSIDIAN_LINKS_END -->"
 
 
-def _find_entry_file(ref: str, fabric_dir: Path) -> Optional[str]:
+def _find_entry_file(ref: str, fabric_dir: Path) -> str | None:
     """Resolve agent:id ref to a filename (without .md extension)."""
     if ":" not in ref:
         return None

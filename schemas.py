@@ -61,8 +61,14 @@ FABRIC_WRITE = {
                 "description": "One-line summary (shown in listings and search results)",
             },
             "tags": {
-                "type": "string",
-                "description": "Comma-separated tags (optional)",
+                "oneOf": [
+                    {"type": "string"},
+                    {"type": "array", "items": {"type": "string"}},
+                ],
+                "description": (
+                    "Tags as a comma-separated string or array. Add do-not-train, "
+                    "no-train, private, secret, or sensitive to exclude an entry from export."
+                ),
             },
             "status": {
                 "type": "string",
@@ -107,8 +113,11 @@ FABRIC_WRITE = {
                 "description": "The tool that produced this result (e.g. 'bash', 'code_editor', 'web_search'). Helps training data reflect real tool use.",
             },
             "artifact_paths": {
-                "type": "string",
-                "description": "Comma-separated file paths of artifacts produced (e.g. 'src/limiter.ts, tests/limiter.test.ts').",
+                "oneOf": [
+                    {"type": "string"},
+                    {"type": "array", "items": {"type": "string"}},
+                ],
+                "description": "File paths of artifacts produced. These are redacted from training exports by default.",
             },
         },
         "required": ["type", "content", "summary"],
@@ -236,6 +245,10 @@ FABRIC_TRAIN = {
             "min_pairs": {
                 "type": "integer",
                 "description": "Minimum pair count required before starting training (default: 10).",
+            },
+            "upload_confirm": {
+                "type": "boolean",
+                "description": "Must be true to upload training data. Omit/false performs a dry-run summary only.",
             },
             "batch_size": {
                 "type": "integer",

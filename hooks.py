@@ -168,7 +168,6 @@ def post_llm_call(session_id="", user_message="", assistant_response="", platfor
         "assistant": assistant_response[:500],
     })
 
-    agent = state.AGENT_NAME or "agent"
     plat = platform or "cli"
 
     # capture decisions: requires decision + outcome in response, AND a substantial

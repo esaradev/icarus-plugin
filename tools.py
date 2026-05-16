@@ -1,6 +1,7 @@
 """Tool handlers — the code that runs when the LLM calls each tool."""
 
 import json
+
 from . import state
 
 
@@ -144,6 +145,7 @@ def fabric_train(args: dict, **kwargs) -> str:
             checkpoints=args.get("n_checkpoints"),
             mode=args.get("mode"),
             min_pairs=args.get("min_pairs", 10),
+            upload_confirm=bool(args.get("upload_confirm", False)),
         )
         return _json(result)
     except Exception as e:

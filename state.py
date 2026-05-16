@@ -8,10 +8,17 @@ import secrets
 import shutil
 import subprocess
 import tempfile
-import urllib.request
 import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    from .fabric_schema import FabricSchemaError, build_entry_document
+    from .storage import append_jsonl, atomic_write_json, atomic_write_text, file_lock
+except ImportError:
+    from fabric_schema import FabricSchemaError, build_entry_document
+    from storage import append_jsonl, atomic_write_json, atomic_write_text, file_lock
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +56,8 @@ def _last_job_id():
 
 
 def _save_job_id(jid):
-    _JOB_FILE.write_text(jid, "utf-8")
+    with file_lock(_JOB_FILE):
+        atomic_write_text(_JOB_FILE, jid)
 
 
 # ── Model registry ───────────────────────────────────────
@@ -67,7 +75,8 @@ def _load_registry():
 
 def _save_registry(registry):
     try:
-        _REGISTRY_FILE.write_text(json.dumps(registry, indent=2), "utf-8")
+        with file_lock(_REGISTRY_FILE):
+            atomic_write_json(_REGISTRY_FILE, registry)
     except Exception as exc:
         logger.warning("icarus: failed to save model registry: %s", exc)
 
@@ -118,8 +127,7 @@ def log_recall(query, results, source="pre_llm_call"):
     }
     _recall_log.append(entry)
     try:
-        with open(_TELEMETRY_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
+        append_jsonl(_TELEMETRY_FILE, entry)
     except Exception:
         pass
 
@@ -271,17 +279,13 @@ def load_creative():
 
 def save_creative(s):
     try:
-        _STATE_FILE.write_text(json.dumps(s, indent=2), "utf-8")
+        with file_lock(_STATE_FILE):
+            atomic_write_json(_STATE_FILE, s)
     except Exception as exc:
         logger.warning("icarus: save state failed: %s", exc)
 
 
 # ── Fabric I/O ───────────────────────────────────────────
-
-def _yaml_scalar(value):
-    """Encode a scalar as a YAML-safe quoted string."""
-    return json.dumps(str(value))
-
 
 def _parse_frontmatter_scalar(text, key):
     """Read a scalar frontmatter value and normalize quoted YAML strings."""
@@ -324,46 +328,37 @@ def write_entry(entry_type, content, summary, tier="hot", tags="", platform="cli
         "FABRIC_PROJECT_ID",
         Path.cwd().name if Path.cwd() != Path.home() else "unknown")
 
-    lines = [
-        "---",
-        f"id: {_yaml_scalar(secrets.token_hex(4))}",
-        f"agent: {_yaml_scalar(agent)}",
-        f"platform: {_yaml_scalar(platform)}",
-        f"timestamp: {_yaml_scalar(ts_iso)}",
-        f"type: {_yaml_scalar(entry_type)}",
-        f"tier: {_yaml_scalar(tier)}",
-        f"summary: {_yaml_scalar(summary)}",
-        f"project_id: {_yaml_scalar(project_id)}",
-        f"session_id: {_yaml_scalar(sid)}",
-    ]
-    if tags:
-        lines.append(f"tags: [{tags}]")
-    if status:
-        lines.append(f"status: {_yaml_scalar(status)}")
-    if outcome:
-        lines.append(f"outcome: {_yaml_scalar(outcome)}")
-    if review_of:
-        lines.append(f"review_of: {_yaml_scalar(review_of)}")
-    if revises:
-        lines.append(f"revises: {_yaml_scalar(revises)}")
-    if customer_id:
-        lines.append(f"customer_id: {_yaml_scalar(customer_id)}")
-    if assigned_to:
-        lines.append(f"assigned_to: {_yaml_scalar(assigned_to)}")
-    if training_value:
-        lines.append(f"training_value: {_yaml_scalar(training_value)}")
-    if verified:
-        lines.append(f"verified: {_yaml_scalar(verified)}")
-    if evidence:
-        lines.append(f"evidence: {_yaml_scalar(evidence)}")
-    if source_tool:
-        lines.append(f"source_tool: {_yaml_scalar(source_tool)}")
-    if artifact_paths:
-        lines.append(f"artifact_paths: [{artifact_paths}]")
-    lines.extend(["---", "", content])
-
     path = FABRIC_DIR / filename
-    path.write_text("\n".join(lines), "utf-8")
+    try:
+        document = build_entry_document(
+            id=secrets.token_hex(4),
+            agent=agent,
+            platform=platform,
+            timestamp=ts_iso,
+            type=entry_type,
+            tier=tier,
+            summary=summary,
+            project_id=project_id,
+            session_id=sid,
+            tags=tags,
+            status=status,
+            outcome=outcome,
+            review_of=review_of,
+            revises=revises,
+            customer_id=customer_id,
+            assigned_to=assigned_to,
+            training_value=training_value,
+            verified=verified,
+            evidence=evidence,
+            source_tool=source_tool,
+            artifact_paths=artifact_paths,
+            content=content,
+        )
+    except FabricSchemaError as exc:
+        raise ValueError(str(exc)) from exc
+
+    with file_lock(path):
+        atomic_write_text(path, document)
     logger.info("icarus: wrote %s", filename)
 
     # opt-in obsidian formatting
@@ -474,7 +469,8 @@ def curate_entry(entry_id, training_value):
                 text = re.sub(r"^training_value: .+$", f"training_value: {training_value}", text, count=1, flags=re.MULTILINE)
             else:
                 text = text.replace("\n---\n", f"\ntraining_value: {training_value}\n---\n", 1)
-            f.write_text(text, "utf-8")
+            with file_lock(f):
+                atomic_write_text(f, text)
             return {"status": "updated", "file": f.name, "training_value": training_value}
 
     return {"error": f"entry {entry_id} not found"}
@@ -615,7 +611,7 @@ def _together_request(method, url, data=None):
     return json.loads(resp.read())
 
 
-def export_training(mode="normal"):
+def export_training(mode="normal", redact=True):
     """Export fabric entries as training pairs. Returns stats dict."""
     export_script = PLUGIN_DIR / "export-training.py"
     if not export_script.exists():
@@ -625,6 +621,7 @@ def export_training(mode="normal"):
         cmd = ["python3", str(export_script), "--output", tmpdir]
         if mode != "normal":
             cmd.extend(["--mode", mode])
+        cmd.append("--redact" if redact else "--no-redact")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if result.returncode != 0:
             return {"error": result.stderr or "export failed"}
@@ -654,11 +651,20 @@ def export_training(mode="normal"):
             except Exception:
                 pair_types = {}
 
+        redaction_report = {}
+        redaction_path = Path(tmpdir) / "redaction-report.json"
+        if redaction_path.exists():
+            try:
+                redaction_report = json.loads(redaction_path.read_text("utf-8"))
+            except Exception:
+                redaction_report = {}
+
         return {
             "pairs": pairs,
             "estimated_tokens": tokens,
             "mode": mode,
             "pair_types": pair_types,
+            "redaction": redaction_report,
             "output": output.strip(),
             "training_data_path": str(together_path) if together_path.exists() else None,
             "_training_data": training_data,
@@ -683,11 +689,8 @@ def _select_training_export_mode(min_pairs):
 
 
 def start_training(model=None, suffix=None, epochs=3, batch_size=None, learning_rate=None,
-                   checkpoints=None, mode=None, min_pairs=10):
+                   checkpoints=None, mode=None, min_pairs=10, upload_confirm=False):
     """Export, upload, and start a Together AI fine-tune."""
-    key = _together_key()
-    if not key:
-        return {"error": "TOGETHER_API_KEY not set in .env"}
 
     if mode:
         export = export_training(mode=mode)
@@ -703,6 +706,21 @@ def start_training(model=None, suffix=None, epochs=3, batch_size=None, learning_
             "mode": export_mode,
             "tried_modes": {k: v.get("pairs", 0) for k, v in tried_modes.items() if "error" not in v},
         }
+
+    if not upload_confirm:
+        safe = dict(export)
+        safe.pop("_training_data", None)
+        safe.pop("training_data_path", None)
+        return {
+            "status": "dry_run",
+            "message": "Training data exported and redacted, but not uploaded. "
+                       "Re-run with upload_confirm=true to start fine-tuning.",
+            **safe,
+        }
+
+    key = _together_key()
+    if not key:
+        return {"error": "TOGETHER_API_KEY not set in .env"}
 
     training_data = export.get("_training_data", "")
     if not training_data:
@@ -826,7 +844,7 @@ def check_training(job_id=None):
             m["status"] = "completed"
             m["output_model"] = data.get("model_output_name", "")
             result["model_id"] = m["output_model"]
-            result["instruction"] = f"Run fabric_eval to test, then fabric_switch_model to activate."
+            result["instruction"] = "Run fabric_eval to test, then fabric_switch_model to activate."
         elif data.get("status") in ("failed", "cancelled", "error"):
             m["status"] = data["status"]
             result["error"] = data.get("error", "unknown")
@@ -915,16 +933,14 @@ def switch_model(model_id, min_eval_score=0.7):
             "scores": scores,
         }
 
-    # find current model for rollback
     lines = env_file.read_text("utf-8").split("\n")
-    old_model = None
-    for l in lines:
-        if l.startswith("LLM_MODEL="):
-            old_model = l.split("=", 1)[1].strip()
+    previous = _env_snapshot(lines, keys=("LLM_MODEL", "OPENAI_BASE_URL", "OPENAI_API_KEY"))
+    old_model = previous.get("LLM_MODEL")
 
-    # backup .env
-    backup = HERMES_HOME / ".env.backup"
+    backup = HERMES_HOME / f".env.backup.{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+    legacy_backup = HERMES_HOME / ".env.backup"
     shutil.copy2(env_file, backup)
+    shutil.copy2(env_file, legacy_backup)
 
     key = _together_key()
     if not key:
@@ -933,18 +949,13 @@ def switch_model(model_id, min_eval_score=0.7):
     # Replacement models are served from Together. Repoint the OpenAI-compatible
     # provider config deliberately and rely on the backup / rollback path to
     # preserve the previous provider state.
-    filtered = [
-        l for l in lines
-        if not l.startswith(("LLM_MODEL=", "OPENAI_BASE_URL=", "OPENAI_API_KEY="))
-    ]
-    filtered.append(f"LLM_MODEL={model_id}")
-    filtered.append("OPENAI_BASE_URL=https://api.together.xyz/v1")
-    filtered.append(f"OPENAI_API_KEY={key}")
-
-    # atomic write
-    tmp = env_file.with_suffix(".tmp")
-    tmp.write_text("\n".join(filtered), "utf-8")
-    tmp.rename(env_file)
+    next_lines = _set_env_values(lines, {
+        "LLM_MODEL": model_id,
+        "OPENAI_BASE_URL": "https://api.together.xyz/v1",
+        "OPENAI_API_KEY": key,
+    })
+    with file_lock(env_file):
+        atomic_write_text(env_file, "\n".join(next_lines).rstrip() + "\n")
 
     # update registry
     for m in registry["models"]:
@@ -954,6 +965,19 @@ def switch_model(model_id, min_eval_score=0.7):
     registry["active_model"] = model_id
     _save_registry(registry)
 
+    manifest = {
+        "switched_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "old": previous,
+        "new": {
+            "LLM_MODEL": model_id,
+            "OPENAI_BASE_URL": "https://api.together.xyz/v1",
+            "OPENAI_API_KEY": "[redacted]",
+        },
+        "backup": str(backup),
+        "eval_score": avg,
+    }
+    atomic_write_json(HERMES_HOME / ".icarus-model-switch.json", manifest)
+
     rollback = f"fabric_switch_model(model_id='{old_model}')" if old_model else "restore from .env.backup"
     return {
         "status": "switched",
@@ -961,6 +985,7 @@ def switch_model(model_id, min_eval_score=0.7):
         "new_model": model_id,
         "eval_score": avg,
         "backup": str(backup),
+        "manifest": str(HERMES_HOME / ".icarus-model-switch.json"),
         "rollback": rollback,
     }
 
@@ -970,26 +995,37 @@ def rollback_model():
     if not HERMES_HOME:
         return {"error": "HERMES_HOME not set"}
 
+    manifest_file = HERMES_HOME / ".icarus-model-switch.json"
     backup = HERMES_HOME / ".env.backup"
     env_file = HERMES_HOME / ".env"
 
-    if not backup.exists():
+    if not backup.exists() and not manifest_file.exists():
         return {"error": "no .env.backup found — nothing to roll back to"}
 
     # read what we're rolling back from
     current_model = None
     if env_file.exists():
-        for l in env_file.read_text("utf-8").split("\n"):
-            if l.startswith("LLM_MODEL="):
-                current_model = l.split("=", 1)[1].strip()
+        for line in env_file.read_text("utf-8").split("\n"):
+            if line.startswith("LLM_MODEL="):
+                current_model = line.split("=", 1)[1].strip()
 
-    shutil.copy2(backup, env_file)
+    if manifest_file.exists() and env_file.exists():
+        try:
+            manifest = json.loads(manifest_file.read_text("utf-8"))
+            old_values = manifest.get("old", {})
+            restored_lines = _set_env_values(env_file.read_text("utf-8").split("\n"), old_values)
+            with file_lock(env_file):
+                atomic_write_text(env_file, "\n".join(restored_lines).rstrip() + "\n")
+        except Exception:
+            shutil.copy2(backup, env_file)
+    else:
+        shutil.copy2(backup, env_file)
 
     # read what we rolled back to
     restored_model = None
-    for l in env_file.read_text("utf-8").split("\n"):
-        if l.startswith("LLM_MODEL="):
-            restored_model = l.split("=", 1)[1].strip()
+    for line in env_file.read_text("utf-8").split("\n"):
+        if line.startswith("LLM_MODEL="):
+            restored_model = line.split("=", 1)[1].strip()
 
     # update registry
     registry = _load_registry()
@@ -1157,6 +1193,43 @@ def build_weekly_report():
         "usage_by_type": usage_stats.get("by_type", {}),
         "trainable_estimate": len(trainable_ids),
     }
+
+
+# ── Model env helpers ────────────────────────────────────
+
+
+def _env_snapshot(lines, keys):
+    wanted = set(keys)
+    out = {}
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        if key in wanted:
+            out[key] = value
+    return out
+
+
+def _set_env_values(lines, values):
+    """Set env keys while preserving comments and unrelated config."""
+    values = {key: value for key, value in values.items() if value is not None}
+    seen = set()
+    out = []
+    for line in lines:
+        if "=" not in line or line.lstrip().startswith("#"):
+            out.append(line)
+            continue
+        key, _ = line.split("=", 1)
+        if key in values:
+            out.append(f"{key}={values[key]}")
+            seen.add(key)
+        else:
+            out.append(line)
+    for key, value in values.items():
+        if key not in seen:
+            out.append(f"{key}={value}")
+    return out
 
 
 # ── SOUL ─────────────────────────────────────────────────

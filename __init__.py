@@ -34,7 +34,7 @@ Hooks (automatic):
 
 import logging
 
-from . import schemas, tools, hooks
+from . import hooks, schemas, tools
 
 logger = logging.getLogger(__name__)
 
