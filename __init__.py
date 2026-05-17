@@ -80,6 +80,14 @@ def register(ctx):
     ctx.register_tool(name="fabric_report", toolset="fabric",
                       schema=schemas.FABRIC_REPORT, handler=tools.fabric_report)
 
+    # x memory (notes from x_search)
+    ctx.register_tool(name="fabric_x_inbox", toolset="fabric",
+                      schema=schemas.FABRIC_X_INBOX, handler=tools.fabric_x_inbox)
+    ctx.register_tool(name="fabric_x_note", toolset="fabric",
+                      schema=schemas.FABRIC_X_NOTE, handler=tools.fabric_x_note)
+    ctx.register_tool(name="fabric_x_recall", toolset="fabric",
+                      schema=schemas.FABRIC_X_RECALL, handler=tools.fabric_x_recall)
+
     # wiki (persistent knowledge layer)
     ctx.register_tool(name="wiki_init", toolset="icarus_wiki",
                       schema=schemas.WIKI_INIT, handler=tools.wiki_init)
@@ -100,4 +108,4 @@ def register(ctx):
     ctx.register_hook("post_llm_call", hooks.post_llm_call)
     ctx.register_hook("on_session_end", hooks.on_session_end)
 
-    logger.info("icarus v3 registered (22 tools, 4 hooks)")
+    logger.info("icarus v3 registered (25 tools, 4 hooks)")

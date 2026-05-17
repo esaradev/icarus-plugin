@@ -177,6 +177,9 @@ def init_wiki(fabric_dir: Path) -> dict:
 _HEADING_RE = re.compile(r"^\s{0,3}(#{1,3})\s+(.+?)\s*$", re.MULTILINE)
 _URL_RE = re.compile(r"https?://[^\s<>\"')]+")
 _CAP_PHRASE_RE = re.compile(r"\b(?:[A-Z][a-zA-Z0-9]+)(?:\s+[A-Z][a-zA-Z0-9]+){0,3}\b")
+# @handles are first-class entities (people/accounts on X and similar nets).
+# Matches @user_name but skips emails by requiring a non-word boundary on the left.
+_HANDLE_RE = re.compile(r"(?:(?<=^)|(?<=[^\w@]))@([A-Za-z0-9_]{2,30})\b")
 
 _STOPPHRASES = {
     "I", "The", "A", "An", "This", "That", "These", "Those",
@@ -198,8 +201,17 @@ def _extract_candidates_heuristic(text: str, max_pages: int = 5) -> list[dict]:
     entities: list[dict] = []
     seen_slugs: set[str] = set()
 
+    first_h1_seen = False
     for match in _HEADING_RE.finditer(text):
+        level = len(match.group(1))
         title = match.group(2).strip().rstrip(":")
+        # First H1 is the source's own title — already captured by
+        # _derive_title and the source page. Promoting it to a separate
+        # topic page produces a long, unique slug that never gets
+        # backlinks. Skip it.
+        if level == 1 and not first_h1_seen:
+            first_h1_seen = True
+            continue
         slug = _slugify(title)
         if slug in seen_slugs or len(title) < 3:
             continue
@@ -209,6 +221,25 @@ def _extract_candidates_heuristic(text: str, max_pages: int = 5) -> list[dict]:
             "title": title,
             "slug": slug,
             "evidence": f"heading: {title}",
+        })
+
+    # @handles: every occurrence is an entity worth a page, even once.
+    # Slug as "at-handle" so handles don't collide with like-named topics
+    # or capitalized phrases — `_slugify("@karpathy")` strips the @ and
+    # collides with the word "karpathy".
+    handle_counts = Counter(m.group(1) for m in _HANDLE_RE.finditer(text))
+    for handle, count in handle_counts.most_common(20):
+        title = f"@{handle}"
+        slug = _slugify(f"at-{handle}")
+        if slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
+        evidence = f"x handle, mentioned {count}× in source" if count > 1 else "x handle"
+        entities.append({
+            "kind": "entity",
+            "title": title,
+            "slug": slug,
+            "evidence": evidence,
         })
 
     phrase_counts = Counter()
@@ -260,6 +291,7 @@ Rules:
 - summary is one line, <= 160 chars, grounded strictly in the source.
 - Omit generic filler ("Introduction", "Overview") and pronouns.
 - Prefer entities that appear only once over repeated noise.
+- @handles (e.g. @someone) are first-class entities. Keep the leading @ in the title; slug them as "at-handle" (no @ in slugs since slugs are kebab-case).
 
 Output JSON object exactly like:
 {{"candidates": [{{"kind": "entity", "title": "Andrej Karpathy", "slug": "andrej-karpathy", "summary": "..."}}]}}

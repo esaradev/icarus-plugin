@@ -110,6 +110,38 @@ FABRIC_WRITE = {
                 "type": "string",
                 "description": "Comma-separated file paths of artifacts produced (e.g. 'src/limiter.ts, tests/limiter.test.ts').",
             },
+            "kanban_task_id": {
+                "type": "string",
+                "description": "Hermes Kanban task ID this write belongs to (e.g. 'KBN-18'). Optional. Lets Icarus show task provenance and scope rollbacks by task.",
+            },
+            "kanban_task_title": {
+                "type": "string",
+                "description": "Human-readable Kanban task title. Optional but recommended when kanban_task_id is set.",
+            },
+            "kanban_task_status": {
+                "type": "string",
+                "description": "Task status at the time of the write (e.g. 'in_progress', 'done', 'failed', 'cancelled'). Optional.",
+            },
+            "kanban_assignee": {
+                "type": "string",
+                "description": "Agent or person assigned to the Kanban task. Optional.",
+            },
+            "kanban_run_id": {
+                "type": "string",
+                "description": "Hermes run/session ID that executed the task. Optional.",
+            },
+            "kanban_lane": {
+                "type": "string",
+                "description": "Kanban lane / column name. Optional.",
+            },
+            "kanban_completed_at": {
+                "type": "string",
+                "description": "ISO timestamp when the Kanban task completed, if applicable. Optional.",
+            },
+            "kanban_failed_at": {
+                "type": "string",
+                "description": "ISO timestamp when the Kanban task failed, if applicable. Optional.",
+            },
         },
         "required": ["type", "content", "summary"],
     },
@@ -416,6 +448,114 @@ FABRIC_REPORT = {
         "type": "object",
         "properties": {},
         "required": [],
+    },
+}
+
+
+# ── X memory (notes from x_search) ───────────────────────────────────
+
+FABRIC_X_INBOX = {
+    "name": "fabric_x_inbox",
+    "description": (
+        "Drop a raw provenance stub for a single X post returned by x_search. "
+        "No synthesis, no wiki ingest — just an append-only record under "
+        "$FABRIC_DIR/raw/x/inbox/. Use this when you saw a post worth keeping "
+        "as evidence but it's not yet worth a curated note. The user can "
+        "triage the inbox later, or call fabric_x_note to promote it."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "post_id": {
+                "type": "string",
+                "description": "X status id (digits). Required.",
+            },
+            "handle": {
+                "type": "string",
+                "description": "Author handle without @, e.g. someone",
+            },
+            "text": {
+                "type": "string",
+                "description": "Post body (will be excerpted to ~280 chars).",
+            },
+            "query": {
+                "type": "string",
+                "description": "The x_search query that surfaced this post.",
+            },
+            "source_url": {
+                "type": "string",
+                "description": "Canonical x.com URL. Derived if omitted.",
+            },
+        },
+        "required": ["post_id"],
+    },
+}
+
+FABRIC_X_NOTE = {
+    "name": "fabric_x_note",
+    "description": (
+        "Save a curated note from one or more X posts. Writes a structured "
+        "raw markdown file under $FABRIC_DIR/raw/x/, runs wiki_ingest so the "
+        "note lands in the user's vault with [[@handle]] and [[topic]] "
+        "backlinks, and registers a fabric entry so the note participates in "
+        "fabric_recall. Use this when an x_search result was actually useful "
+        "and worth surfacing in Obsidian, not just logged. Short excerpts "
+        "only — do not paste full threads."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "takeaway": {
+                "type": "string",
+                "description": "One-paragraph synthesis: what was learned, grounded in the posts. Required.",
+            },
+            "posts": {
+                "type": "string",
+                "description": (
+                    "JSON array of posts. Each item: "
+                    "{\"post_id\":\"...\",\"handle\":\"...\",\"text\":\"...\",\"url\":\"...\"}. "
+                    "url is optional; derived from post_id+handle if omitted. "
+                    "Keep text short — quote, do not dump."
+                ),
+            },
+            "topics": {
+                "type": "string",
+                "description": "Optional comma-separated topic tags to wikilink (e.g. 'rate-limiting, llm-serving').",
+            },
+            "topic_hint": {
+                "type": "string",
+                "description": "Optional slug hint for the filename. Defaults to a slug of the takeaway.",
+            },
+            "query": {
+                "type": "string",
+                "description": "The x_search query that produced these posts.",
+            },
+        },
+        "required": ["takeaway", "posts"],
+    },
+}
+
+FABRIC_X_RECALL = {
+    "name": "fabric_x_recall",
+    "description": (
+        "Recall past fabric entries captured from X (source_tool=x_search). "
+        "Same ranking as fabric_recall, filtered to X-derived notes. Use this "
+        "to surface what you previously saw on X about a topic without "
+        "polluting general recall."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Topic, handle, or keyword to search for.",
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "Maximum entries to return (default: 5)",
+            },
+        },
+        "required": ["query"],
     },
 }
 

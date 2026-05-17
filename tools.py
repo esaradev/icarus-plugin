@@ -236,6 +236,54 @@ def fabric_report(args: dict, **kwargs) -> str:
         return _json({"error": str(e)})
 
 
+# ── X memory (notes from x_search) ───────────────────────────────────
+
+def fabric_x_inbox(args: dict, **kwargs) -> str:
+    post_id = (args.get("post_id") or "").strip()
+    if not post_id:
+        return _json({"error": "post_id is required"})
+    try:
+        from . import x
+        return _json(x.inbox_write(
+            post_id=post_id,
+            handle=args.get("handle", ""),
+            text=args.get("text", ""),
+            query=args.get("query", ""),
+            source_url=args.get("source_url", ""),
+        ))
+    except Exception as e:
+        return _json({"error": str(e)})
+
+
+def fabric_x_note(args: dict, **kwargs) -> str:
+    takeaway = (args.get("takeaway") or "").strip()
+    posts = args.get("posts")
+    if not takeaway or posts in (None, ""):
+        return _json({"error": "takeaway and posts are required"})
+    try:
+        from . import x
+        return _json(x.note_write(
+            takeaway=takeaway,
+            posts=posts,
+            query=args.get("query", ""),
+            topics=args.get("topics"),
+            topic_hint=args.get("topic_hint", ""),
+        ))
+    except Exception as e:
+        return _json({"error": str(e)})
+
+
+def fabric_x_recall(args: dict, **kwargs) -> str:
+    query = (args.get("query") or "").strip()
+    if not query:
+        return _json({"error": "query is required"})
+    try:
+        from . import x
+        return _json(x.recall_x(query, max_results=args.get("max_results", 5)))
+    except Exception as e:
+        return _json({"error": str(e)})
+
+
 # ── Wiki (persistent knowledge layer) ────────────────────────────────
 
 def wiki_init(args: dict, **kwargs) -> str:
