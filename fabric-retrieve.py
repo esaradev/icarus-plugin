@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import os
 import re
 import sys
@@ -258,22 +259,30 @@ def score_entry(entry, query_tokens, agent=None, project=None, relevant_refs=Non
     return score
 
 
+def _content_signature(entry):
+    """Whitespace-normalized hash of an entry body, for duplicate detection.
+
+    The key MUST be discriminating: most session bodies open with the same
+    boilerplate (an injected cron/system preamble, or a recurring greeting),
+    so a short prefix key merges distinct entries. On a live 1448-entry fabric
+    a 50-char prefix key collapsed 1095 entries (75.6%) -- one group of 132
+    cron sessions became a single retrievable entry. Hashing the full,
+    whitespace-normalized body keeps genuine duplicates while leaving
+    distinct entries retrievable.
+    """
+    body = re.sub(r"\s+", " ", str(entry.get("_body", ""))).strip().lower()
+    return hashlib.sha1(body.encode("utf-8", "replace")).hexdigest()
+
+
 def deduplicate(entries):
-    seen = {}
-    result = []
+    """Collapse entries with identical content, keeping the newest of each."""
+    best = {}
     for e in entries:
-        key = (e.get("agent", ""), e.get("type", ""), e.get("_body", "")[:50])
-        existing = seen.get(key)
-        if existing:
-            # Keep the newer one
-            if str(e.get("timestamp", "")) > str(existing.get("timestamp", "")):
-                result.remove(existing)
-                result.append(e)
-                seen[key] = e
-        else:
-            seen[key] = e
-            result.append(e)
-    return result
+        key = (e.get("agent", ""), e.get("type", ""), _content_signature(e))
+        cur = best.get(key)
+        if cur is None or str(e.get("timestamp", "")) > str(cur.get("timestamp", "")):
+            best[key] = e
+    return list(best.values())
 
 
 def retrieve(query, max_results=5, max_tokens=2000, agent=None, project=None):
