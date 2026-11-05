@@ -1170,14 +1170,32 @@ def load_soul():
 
 
 # ── Memory file ──────────────────────────────────────────
+#
+# Writes ICARUS.md — NEVER memories/MEMORY.md.
+#
+# memories/MEMORY.md belongs to Hermes's memory tool: entries are records joined
+# by the "\n§\n" delimiter, guarded by a lock and committed with an atomic rename.
+# This hook used to overwrite that exact path on every session end with a
+# plain-markdown digest of the creative state. Because the store splits records on
+# the § delimiter and the digest contained none, the whole file collapsed into a
+# single bogus entry: silent, total loss of the agent's real memories, recurring
+# on every session end. Keep this digest in its own file; never touch the store.
+
+def _atomic_write(path, text):
+    """Temp file + rename, so a reader never sees a half-written file."""
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text, "utf-8")
+    os.replace(tmp, path)
+
 
 def write_memory_file(s):
+    """Render the creative state to its OWN note (never the memory store)."""
     if not HERMES_HOME:
         return
     mem_dir = HERMES_HOME / "memories"
     mem_dir.mkdir(parents=True, exist_ok=True)
     agent = AGENT_NAME or "agent"
-    lines = [f"# {agent} memory\n"]
+    lines = [f"# {agent} creative state (icarus)\n"]
     if s.get("questions"):
         lines.append("## open questions")
         for q in s["questions"][-5:]:
@@ -1189,4 +1207,4 @@ def write_memory_file(s):
             lines.append(f"- {ln}")
         lines.append("")
     lines.append(f"cycles: {s.get('cycle', 0)}")
-    (mem_dir / "MEMORY.md").write_text("\n".join(lines), "utf-8")
+    _atomic_write(mem_dir / "ICARUS.md", "\n".join(lines))
