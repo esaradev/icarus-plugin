@@ -124,13 +124,58 @@ def on_session_start(session_id="", platform="", **kwargs):
     return {"context": context} if context else None
 
 
+# ── Control-frame stripping ──────────────────────────────
+# Hermes injects bracketed control frames ahead of the user's actual message
+# (the cron preamble, the current-run-time line, skill-load notices). They are
+# byte-identical on every run, so they dominate a recall query and match other
+# boilerplate-prefixed entries instead of the task. Frames may contain nested
+# brackets: the cron preamble quotes literal "[SILENT]" / "[CRON_FAILURE]".
+_CONTROL_FRAME_PREFIXES = (
+    "[IMPORTANT:", "[CURRENT RUN TIME:", "[SYSTEM", "[BLOCKED:", "[BACKGROUND",
+)
+_MAX_FRAME_CHARS = 4000
+
+
+def _strip_control_frames(text):
+    """Drop Hermes' injected control frames so recall keys on the task text.
+
+    Fails OPEN: an unmatched frame (no closing bracket) or an implausibly long
+    span is kept verbatim, so a malformed frame can never discard the real
+    message.
+    """
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] == "[" and text.startswith(_CONTROL_FRAME_PREFIXES, i):
+            depth, j = 0, i
+            while j < n:
+                if text[j] == "[":
+                    depth += 1
+                elif text[j] == "]":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                j += 1
+            if j < n and (j - i) <= _MAX_FRAME_CHARS:
+                i = j + 1
+                continue
+        out.append(text[i])
+        i += 1
+    return "".join(out).strip()
+
+
 def pre_llm_call(session_id="", user_message="", is_first_turn=False, **kwargs):
     """Inject relevant memories when topic changes."""
     global _last_query_tokens
     if not user_message:
         return None
 
-    tokens = _tokenize(user_message)
+    # Recall should key on the TASK, not on Hermes' injected control frames
+    # (cron/system preambles are byte-identical every run and match every other
+    # boilerplate-prefixed entry, burying the task).
+    query = _strip_control_frames(user_message) or user_message
+
+    tokens = _tokenize(query)
     if not tokens:
         return None
 
@@ -142,12 +187,12 @@ def pre_llm_call(session_id="", user_message="", is_first_turn=False, **kwargs):
     _last_query_tokens = tokens
 
     agent = state.AGENT_NAME or "agent"
-    results = state.recall(user_message, max_results=5, agent=agent)
+    results = state.recall(query, max_results=5, agent=agent)
     if not results:
         return None
 
     # log what was recalled for telemetry
-    state.log_recall(user_message, results, source="pre_llm_call")
+    state.log_recall(query, results, source="pre_llm_call")
 
     lines = ["[fabric] relevant to your request:"]
     for e in results:
